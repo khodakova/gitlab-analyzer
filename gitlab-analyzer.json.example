@@ -1,0 +1,18 @@
+{
+  "gitlab": {
+    "url": "https://gitlab.com"
+  },
+  "defaults": {
+    "branch": "develop",
+    "repoNameFilter": "-front",
+    "excludeRepos": [],
+    "pathFilter": "/src/",
+    "includeTests": false
+  },
+  "commands": {
+    "find-strings": {
+      "concurrency": 5,
+      "output": "./results/find-strings.json"
+    }
+  }
+}

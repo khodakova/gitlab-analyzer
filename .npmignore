@@ -1,0 +1,16 @@
+node_modules/
+.env
+*.log
+.idea/
+.vscode/
+.codegraph/
+.omo/
+src/
+tsconfig.json
+tsconfig.build.json
+.gitignore
+.npmignore
+.env.example
+gitlab-analyzer.json.example
+.omo/plans/PLAN.md
+.omo/plans/gitlab-analyzer-tasks.md
