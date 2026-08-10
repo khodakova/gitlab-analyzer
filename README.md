@@ -379,10 +379,26 @@ config files are an automatic config-load failure — by design.
 
 ## Status
 
-Alpha (Phase 3 — CLI + library surface complete). The single `find-strings`
-command is feature-complete against the MVP plan; remaining work is end-to-end
+Alpha (Phase 3 — CLI + library surface complete; Phase 4 — build migrated to
+**tsup** with dual ESM + CJS output). The single `find-strings` command is
+feature-complete against the MVP plan; remaining work is end-to-end
 verification against a live GitLab instance (Phase 5) and a public release
-(Phase 4).
+(Phase 5 publish).
+
+Both module formats are published from a single source tree:
+
+```js
+// ESM
+import { findStrings, loadConfig } from 'gitlab-analyzer'
+
+// CJS
+const { findStrings, loadConfig } = require('gitlab-analyzer')
+```
+
+Both resolve to the same public API (`findStrings`, `loadConfig`, types
+`FindStringsOptions` / `MatchResult`). The CJS variant is emitted as
+`dist/index.cjs` and the ESM variant as `dist/index.js`; types resolve via
+the `exports["."].types` field to `dist/index.d.ts`.
 
 ## License
 

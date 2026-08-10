@@ -7,19 +7,20 @@
   "repository": "",
   "bugs": "",
   "homepage": "",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "gitlab-analyzer": "./bin/gitlab-analyzer.js"
+    "gitlab-analyzer": "./dist/cli.js"
   },
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     }
   },
   "files": [
-    "bin/",
     "dist/",
     "README.md",
     "LICENSE"
@@ -29,7 +30,8 @@
   },
   "packageManager": "yarn@1.22.19",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsup",
+    "build:types": "tsc --noEmit -p tsconfig.json",
     "dev": "tsx src/cli.ts",
     "prepublishOnly": "yarn run build",
     "test": "vitest run",
@@ -52,7 +54,8 @@
   "devDependencies": {
     "@types/node": "20",
     "@vitest/coverage-v8": "4.1.10",
-    "typescript": "7.0.2",
+    "tsup": "8.5.1",
+    "typescript": "5.7.3",
     "vitest": "4.1.10"
   }
 }

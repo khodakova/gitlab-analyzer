@@ -1,4 +1,6 @@
-#!/usr/bin/env node
+// Note: `#!/usr/bin/env node` shebang is injected by tsup's `banner` option
+// in `tsup.config.ts`. Keeping it out of source keeps the file lintable as
+// a normal ES module (no execute-permission assumptions).
 import { Command, Option, CommanderError } from 'commander';
 import { writeFile } from 'node:fs/promises';
 import {
