@@ -218,6 +218,21 @@ PRIVATE_TOKEN=<your-private-token> \
     --output ./results/find-strings.json
 ```
 
+### Multi-line invocations (PowerShell)
+
+For longer commands, PowerShell continues a line with a backtick (`` ` ``)
+at the end of each line. The `>>` prefix is PowerShell's continuation
+prompt — type the backtick, press Enter, and keep typing. The output
+filename uses `$(Get-Date -Format ...)` so each run lands in its own
+file and nothing gets overwritten:
+
+```powershell
+node dist/cli.js find-strings 'string1', 'string2' `
+  --repo-filter 'my-repo' `
+  --include-tests `
+  -o "./results/run-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
+```
+
 ### Output routing
 
 - **`--output <path>`** (or `commands.find-strings.output` in the config)
