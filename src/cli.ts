@@ -10,6 +10,8 @@ import {
   type MatchResult,
 } from './commands/find-strings.ts';
 import { loadConfig } from './config/load.ts';
+import type { GitlabAnalyzerConfig } from './config/schema.ts';
+import { axiosInstance } from './api/config.ts';
 
 /**
  * CLI + programmatic entry for `gitlab-analyzer`.
@@ -42,9 +44,19 @@ import { loadConfig } from './config/load.ts';
  * passed into {@link runFindStrings}.
  *
  * All fields are optional at the type level because commander only assigns
- * them when the corresponding flag is present. The action handler fills in
- * config-file fallbacks before building the {@link FindStringsOptions} it
- * hands to the library.
+ * them when the corresponding flag is present. {@link resolveOptions}
+ * fills in config-file and built-in defaults before building the
+ * {@link FindStringsOptions} handed to the library.
+ *
+ * Resolution precedence (highest wins):
+ *
+ *   1. CLI flag (this object)
+ *   2. Environment variable (`PRIVATE_TOKEN`, `GITLAB_URL` — the latter
+ *      typically populated by `.env` via dotenv)
+ *   3. `gitlab-analyzer.json` config file (`defaults.*`,
+ *      `commands.find-strings.*`, `gitlab.url`)
+ *   4. Built-in default (`'develop'` for branch, `/src/` for path filter,
+ *      `false` for includeTests, `5` for concurrency, etc.)
  */
 export type FindStringsCliOptions = {
   repoFilter?: string;
@@ -57,29 +69,166 @@ export type FindStringsCliOptions = {
 };
 
 /**
+ * Fully resolved `find-strings` options — every required field is present
+ * (or the `errors` array is non-empty in {@link resolveOptions}'s return).
+ */
+export type ResolvedFindStringsOptions = {
+  /** Base URL of the GitLab instance (from `GITLAB_URL` env or `gitlab.url` config). */
+  gitlabUrl: string;
+  /** Branch to scan. */
+  branch: string;
+  /** Substring filter for project names (optional). */
+  repoNameFilter: string | undefined;
+  /** Project names to skip. */
+  excludeRepos: string[];
+  /** Substring filter for file paths inside each archive. */
+  pathFilter: string;
+  /** Whether to include `*.test.*` files. */
+  includeTests: boolean;
+  /** Max parallel archive-fetch + zip-parse tasks. */
+  concurrency: number;
+  /** Output file path; `undefined` → stdout. */
+  output: string | undefined;
+};
+
+/**
+ * Description of a single missing-required option. Collected into a list
+ * so the user gets ALL missing fields in one error instead of fixing them
+ * one by one across multiple invocations.
+ */
+export type ResolveError = {
+  field: string;
+  message: string;
+};
+
+export type ResolveResult =
+  | { ok: true; resolved: ResolvedFindStringsOptions }
+  | { ok: false; errors: ResolveError[] };
+
+/**
+ * Resolve every `find-strings` option using the documented precedence
+ * (CLI → env → config → built-in default) and collect ALL missing-required
+ * fields into a single structured error list.
+ *
+ * Required (must be present from at least one source):
+ *
+ *   - `gitlabUrl`  — from `GITLAB_URL` env (via dotenv-loaded `.env`) or
+ *                    `gitlab.url` in `gitlab-analyzer.json`
+ *   - `PRIVATE_TOKEN` — from env only; intentionally NEVER read from config
+ *                       (security policy — see README "Security: tokens")
+ *   - At least one positional search string
+ *
+ * Each error carries a `field` name (for programmatic handling) and a
+ * `message` explaining how to satisfy it. The CLI layer formats these into
+ * the user-facing error.
+ *
+ * Exported for unit testing; not part of the public library surface
+ * (re-exported from `src/index.ts` only the high-level helpers).
+ */
+export function resolveOptions(
+  strings: readonly string[],
+  cliOpts: FindStringsCliOptions,
+  config: GitlabAnalyzerConfig,
+): ResolveResult {
+  const errors: ResolveError[] = [];
+
+  // Required: gitlabUrl — env first, then config.
+  const gitlabUrl = process.env.GITLAB_URL ?? config.gitlab?.url;
+  if (!gitlabUrl) {
+    errors.push({
+      field: 'gitlabUrl',
+      message:
+        'Set GITLAB_URL in the environment (or .env), or add "gitlab.url" to gitlab-analyzer.json.',
+    });
+  }
+
+  // Required: PRIVATE_TOKEN — env only (security: never read tokens from config).
+  if (!process.env.PRIVATE_TOKEN) {
+    errors.push({
+      field: 'PRIVATE_TOKEN',
+      message:
+        'Set PRIVATE_TOKEN in the environment (or .env). Tokens are never read from config files.',
+    });
+  }
+
+  // Required: at least one search string.
+  if (strings.length === 0) {
+    errors.push({
+      field: 'strings',
+      message: 'Provide at least one search string as a positional argument.',
+    });
+  }
+
+  // Optional/derived with fallback chain: CLI > config > built-in default.
+  const cmdDefaults = config.commands?.['find-strings'];
+
+  const resolved: ResolvedFindStringsOptions = {
+    gitlabUrl: gitlabUrl as string, // safe: gated above; errors[] is non-empty if missing
+    branch: cliOpts.branch ?? config.defaults?.branch ?? 'develop',
+    repoNameFilter:
+      cliOpts.repoFilter ?? config.defaults?.repoNameFilter,
+    excludeRepos:
+      cliOpts.exclude ?? config.defaults?.excludeRepos ?? [],
+    pathFilter: cliOpts.pathFilter ?? config.defaults?.pathFilter ?? '/src/',
+    includeTests:
+      cliOpts.includeTests ?? config.defaults?.includeTests ?? false,
+    concurrency:
+      cliOpts.concurrency ?? cmdDefaults?.concurrency ?? 5,
+    output: cliOpts.output ?? cmdDefaults?.output,
+  };
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, resolved };
+}
+
+/**
  * Internal: shared implementation invoked by the commander action handler.
  *
- * Exported separately so tests can drive the full pipeline (load config →
+ * Exported separately so tests can drive the full pipeline (resolve options →
  * run search → write output) without spawning a child process.
  *
  * @returns Object containing the parsed results and the resolved output path
  *   (or `undefined` if results were written to stdout).
+ * @throws {Error} When one or more required options cannot be resolved from
+ *   any source. The message contains the full list of missing fields with
+ *   guidance on how to satisfy each one.
  */
 export async function runFindStrings(
   strings: string[],
   opts: FindStringsCliOptions,
 ): Promise<{ results: MatchResult[]; outputPath: string | undefined }> {
   const config = await loadConfig();
-  const cmdConfig = config.commands['find-strings'];
+  const resolution = resolveOptions(strings, opts, config);
+
+  if (!resolution.ok) {
+    const lines = resolution.errors
+      .map((e) => `  - ${e.field}: ${e.message}`)
+      .join('\n');
+    throw new Error(
+      `Cannot run find-strings — missing required options:\n${lines}`,
+    );
+  }
+
+  const { resolved } = resolution;
+
+  // Propagate the resolved GitLab URL to the module-level axiosInstance so
+  // HTTP requests go to the right host. Necessary when only `config.gitlab.url`
+  // (not `GITLAB_URL` env) is set, since `axiosInstance` was created at module
+  // load before resolution ran. When env already provides the URL,
+  // `axiosInstance.defaults.baseURL` matches `resolved.gitlabUrl` and this
+  // assignment is a no-op.
+  axiosInstance.defaults.baseURL = resolved.gitlabUrl;
 
   const findOpts: FindStringsOptions = {
     searchStrings: strings,
-    branch: opts.branch ?? config.defaults.branch,
-    repoNameFilter: opts.repoFilter ?? config.defaults.repoNameFilter,
-    excludeRepos: opts.exclude ?? config.defaults.excludeRepos,
-    pathFilter: opts.pathFilter ?? config.defaults.pathFilter,
-    includeTests: opts.includeTests ?? config.defaults.includeTests,
-    concurrency: opts.concurrency ?? cmdConfig.concurrency,
+    branch: resolved.branch,
+    repoNameFilter: resolved.repoNameFilter,
+    excludeRepos: resolved.excludeRepos,
+    pathFilter: resolved.pathFilter,
+    includeTests: resolved.includeTests,
+    concurrency: resolved.concurrency,
     onProgress: (done, total, currentRepo) => {
       process.stderr.write(`[${done}/${total}] ${currentRepo}\n`);
     },
@@ -88,7 +237,7 @@ export async function runFindStrings(
   const results: MatchResult[] = await findStrings(findOpts);
 
   const json = JSON.stringify(results, null, 2);
-  const outputPath = opts.output ?? cmdConfig.output;
+  const outputPath = resolved.output;
 
   if (outputPath) {
     await writeFile(outputPath, json, 'utf-8');

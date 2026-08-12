@@ -35,25 +35,22 @@ After a global install, the `gitlab-analyzer` binary is on your `PATH`.
 
 ## Quick Start
 
-1. **Create a config** at `./gitlab-analyzer.json` (next to where you'll run
-   the binary, or under `~/.config/gitlab-analyzer/config.json`):
+The minimum to run `find-strings` is a working `.env` with your GitLab URL
+and a private token — **no config file is required**. The CLI checks CLI
+flags, then environment variables, then `gitlab-analyzer.json`, then
+built-in defaults. If anything required is still missing after all that,
+the CLI prints one consolidated error listing every missing field.
 
-   ```json
-   {
-     "gitlab": {
-       "url": "https://gitlab.example.com"
-     }
-   }
+1. **Create `.env`** in the directory where you'll run the binary (it's
+   already in `.gitignore`):
+
+   ```ini
+   # .env
+   GITLAB_URL=https://gitlab.example.com
+   PRIVATE_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
    ```
 
-2. **Export your GitLab token** as an environment variable — the config never
-   holds secrets:
-
-   ```bash
-   export PRIVATE_TOKEN=<your-private-token>
-   ```
-
-3. **Run a search**:
+2. **Run a search**:
 
    ```bash
    gitlab-analyzer find-strings 'console.log' 'debugger' \
@@ -64,14 +61,49 @@ After a global install, the `gitlab-analyzer` binary is on your `PATH`.
    Progress (`[3/12] my-frontend-app`) goes to **stderr**; the JSON array of
    matches goes to `./results.json`.
 
+> A `gitlab-analyzer.json` config file is **optional**. Use it when you want
+> to set persistent defaults (branch, excludeRepos, concurrency, output
+> path) without typing them on every command. See [Configuration](#configuration)
+> for the precedence chain and field reference.
+
 ## Configuration
 
-`gitlab-analyzer` reads configuration from JSON / JS / TS files via
-[cosmiconfig](https://github.com/davidtheclark/cosmiconfig). Files are looked
-up in two layers (project and user-home), merged with built-in defaults, and
-validated against a [zod](https://zod.dev) schema.
+`gitlab-analyzer` resolves every option through a single precedence chain.
+The CLI does not require any config file to be present — a working `.env`
+is enough. A `gitlab-analyzer.json` is only needed when you want persistent
+defaults (branch, excludeRepos, concurrency, output path) across commands.
 
-### Search locations
+### Precedence
+
+Each option is resolved in this order (highest wins):
+
+```
+1. CLI flag                        e.g. --branch main
+2. Environment variable            GITLAB_URL, PRIVATE_TOKEN (typically from .env)
+3. gitlab-analyzer.json config     defaults.*, commands.find-strings.*, gitlab.url
+4. Built-in default                branch="develop", pathFilter="/src/", concurrency=5, ...
+```
+
+If, after all four sources are consulted, a **required** option is still
+missing, the CLI exits with **one** error that lists every missing field
+along with guidance on how to satisfy it. Required fields are:
+
+- `gitlab.url` — from `GITLAB_URL` env or `gitlab.url` in config
+- `PRIVATE_TOKEN` — from env only (never config — see [Security](#security-tokens))
+- At least one positional search string
+
+### Optional config file
+
+A config file is the right place for **non-secret defaults** you want to
+reuse across invocations: default branch, repo exclusion list, output path,
+concurrency, etc. Tokens never belong in a config file.
+
+If you DO want one, `gitlab-analyzer` reads it from JSON / JS / TS files via
+[cosmiconfig](https://github.com/davidtheclark/cosmiconfig). Files are
+looked up in two layers (project and user-home), merged with built-in
+defaults, and validated against a [zod](https://zod.dev) schema.
+
+#### Search locations
 
 Two layers are searched, in this order (first match wins):
 
@@ -93,25 +125,14 @@ filesystem root, looking for any of:
 - `config.js` / `config.cjs` / `config.mjs`
 - `config.ts`
 
-If nothing is found in either layer, `loadConfig()` throws with an instruction
-telling you where to create the config.
-
-### Priority
-
-When all layers are merged, the precedence (highest wins) is:
-
-```
-CLI flags  >  environment variables  >  project config  >  home config  >  built-in defaults
-```
-
-All five sources are active in `find-strings`: CLI flags win, then
-environment variables (e.g. `PRIVATE_TOKEN`), then config files, then the
-schema defaults.
+When no file is found in either layer, `loadConfig()` simply returns a
+fully defaulted object — `gitlab` is undefined, the CLI then surfaces the
+specific missing fields via its consolidated error.
 
 ### Minimal example
 
-The smallest valid config contains only your GitLab URL. Everything else falls
-back to defaults:
+When you DO use a config file, the smallest meaningful one contains only
+your GitLab URL. Everything else falls back to defaults:
 
 ```json
 {
@@ -148,11 +169,11 @@ A more complete example showing every supported field:
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `gitlab.url` | string (URL) | — (required) | Base URL of your GitLab instance |
+| `gitlab.url` | string (URL) | — | Base URL of your GitLab instance. Optional in config — `GITLAB_URL` env (or `.env`) also works. |
 | `defaults.branch` | string | `"develop"` | Branch to scan |
 | `defaults.repoNameFilter` | string | — | Substring filter for repo names |
 | `defaults.excludeRepos` | string[] | `[]` | Repo names to skip |
-| `defaults.pathFilter` | string | — | Substring filter for file paths |
+| `defaults.pathFilter` | string | `"/src/"` (built-in) | Substring filter for file paths |
 | `defaults.includeTests` | boolean | `false` | Include `*.test.*` files |
 | `commands.find-strings.concurrency` | int (positive) | `5` | Parallel requests to GitLab |
 | `commands.find-strings.output` | string | — | Path to write JSON results |
@@ -309,19 +330,27 @@ A minimal example:
 
 ## Troubleshooting
 
-### "No configuration found"
+### "Cannot run find-strings — missing required options:"
 
-`loadConfig()` did not find any of the supported config files. Create
-`gitlab-analyzer.json` in your project root or
-`~/.config/gitlab-analyzer/config.json` with at minimum:
+The CLI checked every source (CLI flags, env vars, config file, built-in
+defaults) and still couldn't satisfy one or more required fields. The error
+message itself tells you exactly which fields are missing and how to fix
+each one. Example:
 
-```json
-{
-  "gitlab": {
-    "url": "https://your-gitlab.example.com"
-  }
-}
 ```
+Error: Cannot run find-strings — missing required options:
+  - gitlabUrl: Set GITLAB_URL in the environment (or .env), or add "gitlab.url" to gitlab-analyzer.json.
+  - PRIVATE_TOKEN: Set PRIVATE_TOKEN in the environment (or .env). Tokens are never read from config files.
+```
+
+The most common fixes:
+
+- Add `GITLAB_URL=` and `PRIVATE_TOKEN=` lines to a `.env` file in the
+  current directory (it's already in `.gitignore`).
+- Or export them in the shell: `export PRIVATE_TOKEN=... && export GITLAB_URL=...`
+- Or add `"gitlab": { "url": "..." }` to `gitlab-analyzer.json` for the URL.
+
+A config file is **never required** to run `gitlab-analyzer`.
 
 ### "401 Unauthorized"
 

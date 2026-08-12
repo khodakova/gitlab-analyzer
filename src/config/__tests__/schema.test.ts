@@ -8,12 +8,32 @@ describe('GitlabAnalyzerConfigSchema', () => {
         gitlab: { url: 'https://gitlab.com' },
       });
 
-      expect(parsed.gitlab.url).toBe('https://gitlab.com');
+      expect(parsed.gitlab?.url).toBe('https://gitlab.com');
       expect(parsed.defaults.branch).toBe('develop');
       expect(parsed.defaults.excludeRepos).toEqual([]);
       expect(parsed.defaults.includeTests).toBe(false);
       expect(parsed.commands['find-strings'].concurrency).toBe(5);
       expect(parsed.commands['find-strings'].output).toBeUndefined();
+    });
+
+    it('parses empty {} and applies all defaults (url must come from env)', () => {
+      // New behavior (post-precedence-refactor): a config file is OPTIONAL.
+      // When missing or empty, the schema fills in defaults and leaves
+      // `gitlab` undefined — the CLI then resolves `gitlabUrl` from
+      // GITLAB_URL env (or errors out with a clear message).
+      const parsed = GitlabAnalyzerConfigSchema.parse({});
+
+      expect(parsed.gitlab).toBeUndefined();
+      expect(parsed.defaults.branch).toBe('develop');
+      expect(parsed.defaults.excludeRepos).toEqual([]);
+      expect(parsed.defaults.includeTests).toBe(false);
+      expect(parsed.commands['find-strings'].concurrency).toBe(5);
+    });
+
+    it('parses {gitlab: {}} with empty gitlab block (url deferred to env)', () => {
+      const parsed = GitlabAnalyzerConfigSchema.parse({ gitlab: {} });
+
+      expect(parsed.gitlab).toEqual({ url: undefined });
     });
   });
 
@@ -36,19 +56,12 @@ describe('GitlabAnalyzerConfigSchema', () => {
   });
 
   describe('required fields', () => {
-    it('rejects missing gitlab.url', () => {
-      expect(() =>
-        GitlabAnalyzerConfigSchema.parse({
-          gitlab: {},
-        }),
-      ).toThrow(/url|Required/i);
-    });
+    // NOTE: post-refactor, `gitlab` and `gitlab.url` are OPTIONAL in the
+    // schema — runtime resolution prefers GITLAB_URL env over config, and
+    // the CLI surfaces a clear "missing required" error when neither source
+    // provides a URL. The schema only enforces *shape* correctness.
 
-    it('rejects missing gitlab object entirely', () => {
-      expect(() => GitlabAnalyzerConfigSchema.parse({})).toThrow(/gitlab|Required/i);
-    });
-
-    it('rejects non-URL gitlab.url', () => {
+    it('rejects non-URL gitlab.url when one IS provided', () => {
       expect(() =>
         GitlabAnalyzerConfigSchema.parse({
           gitlab: { url: 'not-a-url' },

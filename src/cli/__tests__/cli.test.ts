@@ -23,14 +23,25 @@ vi.mock('node:fs/promises', () => ({
   writeFile: mocks.writeFile,
 }));
 
-import { buildProgram, runCli, runFindStrings } from '../../cli.ts';
+import { buildProgram, runCli, runFindStrings, resolveOptions } from '../../cli.ts';
+
+/**
+ * Default env values for tests. Set in the file-level `beforeEach` below so
+ * every test has GITLAB_URL and PRIVATE_TOKEN available unless it explicitly
+ * opts out (e.g. to assert the "missing required" error path).
+ */
+const TEST_GITLAB_URL = 'https://gitlab.example.com';
+const TEST_PRIVATE_TOKEN = 'test-token-for-vitest';
 
 const collectWriteCalls = (spy: ReturnType<typeof vi.spyOn>): string =>
-  spy.mock.calls.map((c) => String(c[0])).join('');
+  spy.mock.calls.map((c: readonly unknown[]) => String(c[0])).join('');
 
 // Reusable default config shape for mocked loadConfig().
+// Note: post-refactor, `gitlab` is optional тАФ the loader no longer requires
+// it (URL comes from GITLAB_URL env in real runs, set up in the file-level
+// beforeEach below). Tests that exercise config-file-driven resolution pass
+// a config with `gitlab` populated; tests of the missing-required path omit it.
 const defaultConfig = () => ({
-  gitlab: { url: 'https://gitlab.example.com' },
   defaults: {
     branch: 'develop',
     excludeRepos: [],
@@ -39,6 +50,17 @@ const defaultConfig = () => ({
   commands: {
     'find-strings': { concurrency: 5 },
   },
+});
+
+/**
+ * File-level setup: make `resolveOptions` happy for every test that does
+ * NOT specifically exercise the missing-required error path. Tests that
+ * want to assert on missing fields must `delete process.env.GITLAB_URL`
+ * (and/or PRIVATE_TOKEN) inside the test body or its local beforeEach.
+ */
+beforeEach(() => {
+  process.env.GITLAB_URL = TEST_GITLAB_URL;
+  process.env.PRIVATE_TOKEN = TEST_PRIVATE_TOKEN;
 });
 
 describe('cli > buildProgram', () => {
@@ -331,8 +353,22 @@ describe('cli > buildProgram', () => {
   });
 
   describe('runtime error handling', () => {
-    it('catches loadConfig errors, prints to stderr, and exits 1', async () => {
-      mocks.loadConfig.mockRejectedValue(new Error('Config not found'));
+    it('catches missing-required errors from resolveOptions, prints to stderr, and exits 1', async () => {
+      // Post-refactor: loadConfig() no longer rejects on missing config
+      // (it returns a defaulted object). The action handler now catches
+      // errors thrown by `resolveOptions` when both env vars and config
+      // fail to provide gitlabUrl / PRIVATE_TOKEN. The error message
+      // contains a consolidated list of every missing field.
+      delete process.env.GITLAB_URL;
+      delete process.env.PRIVATE_TOKEN;
+      mocks.loadConfig.mockResolvedValue({
+        defaults: {
+          branch: 'develop',
+          excludeRepos: [],
+          includeTests: false,
+        },
+        commands: { 'find-strings': { concurrency: 5 } },
+      });
 
       const program = buildProgram();
 
@@ -351,7 +387,13 @@ describe('cli > buildProgram', () => {
         });
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain('Error: Config not found');
+      // Error header from the action handler.
+      expect(stderrText).toMatch(/Error: Cannot run find-strings/);
+      // Consolidated list тАФ every missing field appears in ONE error.
+      expect(stderrText).toContain('gitlabUrl');
+      expect(stderrText).toContain('PRIVATE_TOKEN');
+      expect(stderrText).toContain('GITLAB_URL');
+      expect(stderrText).toContain('Set PRIVATE_TOKEN');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });
@@ -557,5 +599,216 @@ describe('cli > runFindStrings (exported helper)', () => {
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
     expect(mocks.writeFile.mock.calls[0][0]).toBe('/tmp/from-config.json');
     expect(result.outputPath).toBe('/tmp/from-config.json');
+  });
+});
+
+describe('cli > resolveOptions (precedence: CLI > env > config > default)', () => {
+  // The file-level beforeEach sets GITLAB_URL and PRIVATE_TOKEN. Tests in
+  // this block mutate those values locally as needed.
+
+  /** Minimal valid config for happy-path tests тАФ no gitlab block required. */
+  const emptyConfig = () => ({
+    defaults: {
+      branch: 'develop',
+      excludeRepos: [],
+      includeTests: false,
+    },
+    commands: { 'find-strings': { concurrency: 5 } },
+  });
+
+  describe('precedence тАФ CLI flag wins', () => {
+    it('--branch overrides config.defaults.branch', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, branch: 'main' },
+      };
+
+      const result = resolveOptions(['x'], { branch: 'develop' }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.branch).toBe('develop');
+    });
+
+    it('--repo-filter overrides config.defaults.repoNameFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, repoNameFilter: 'backend' },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { repoFilter: 'frontend' },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.repoNameFilter).toBe('frontend');
+    });
+
+    it('--include-tests overrides config.defaults.includeTests', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, includeTests: true },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { includeTests: false },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.includeTests).toBe(false);
+    });
+
+    it('--concurrency overrides config.commands.find-strings.concurrency', () => {
+      const config = {
+        ...emptyConfig(),
+        commands: { 'find-strings': { concurrency: 10 } },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { concurrency: 3 },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.concurrency).toBe(3);
+    });
+  });
+
+  describe('precedence тАФ config fills in when CLI is silent', () => {
+    it('falls back to config.defaults.branch = "main"', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, branch: 'main' },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.branch).toBe('main');
+    });
+
+    it('falls back to config.defaults.excludeRepos', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: {
+          ...emptyConfig().defaults,
+          excludeRepos: ['archived', 'wip'],
+        },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.excludeRepos).toEqual(['archived', 'wip']);
+    });
+  });
+
+  describe('precedence тАФ built-in default when nothing else', () => {
+    it('branch defaults to "develop"', () => {
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.branch).toBe('develop');
+    });
+
+    it('pathFilter defaults to "/src/"', () => {
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.pathFilter).toBe('/src/');
+    });
+
+    it('concurrency defaults to 5', () => {
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.concurrency).toBe(5);
+    });
+
+    it('excludeRepos defaults to []', () => {
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.excludeRepos).toEqual([]);
+    });
+  });
+
+  describe('precedence тАФ env > config for gitlabUrl', () => {
+    it('GITLAB_URL env wins over config.gitlab.url', () => {
+      process.env.GITLAB_URL = 'https://env-gitlab.example.com';
+
+      const config = {
+        ...emptyConfig(),
+        gitlab: { url: 'https://config-gitlab.example.com' },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://env-gitlab.example.com');
+    });
+
+    it('config.gitlab.url is used when GITLAB_URL env is unset', () => {
+      delete process.env.GITLAB_URL;
+
+      const config = {
+        ...emptyConfig(),
+        gitlab: { url: 'https://config-gitlab.example.com' },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://config-gitlab.example.com');
+    });
+  });
+
+  describe('error collection тАФ every missing field is reported in one shot', () => {
+    it('reports gitlabUrl + PRIVATE_TOKEN + strings when all three are missing', () => {
+      delete process.env.GITLAB_URL;
+      delete process.env.PRIVATE_TOKEN;
+
+      const result = resolveOptions([], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const fields = result.errors.map((e) => e.field);
+        expect(fields).toEqual(
+          expect.arrayContaining(['gitlabUrl', 'PRIVATE_TOKEN', 'strings']),
+        );
+        // Each error carries actionable guidance.
+        const gitlabErr = result.errors.find((e) => e.field === 'gitlabUrl');
+        expect(gitlabErr?.message).toMatch(/GITLAB_URL|gitlab\.url/);
+        const tokenErr = result.errors.find((e) => e.field === 'PRIVATE_TOKEN');
+        expect(tokenErr?.message).toMatch(/PRIVATE_TOKEN/);
+      }
+    });
+
+    it('does NOT include fields that ARE satisfied', () => {
+      delete process.env.GITLAB_URL;
+      delete process.env.PRIVATE_TOKEN;
+      // Satisfy strings but leave the others missing.
+      const result = resolveOptions(['needle'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const fields = result.errors.map((e) => e.field);
+        expect(fields).not.toContain('strings');
+        expect(fields).toEqual(
+          expect.arrayContaining(['gitlabUrl', 'PRIVATE_TOKEN']),
+        );
+      }
+    });
+
+    it('returns ok:true when all required fields are present', () => {
+      // File-level beforeEach already sets GITLAB_URL + PRIVATE_TOKEN.
+      const result = resolveOptions(['needle'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+    });
   });
 });
