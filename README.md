@@ -423,11 +423,10 @@ config files are an automatic config-load failure — by design.
 
 ## Status
 
-Alpha (Phase 3 — CLI + library surface complete; Phase 4 — build migrated to
-**tsup** with dual ESM + CJS output). The single `find-strings` command is
-feature-complete against the MVP plan; remaining work is end-to-end
-verification against a live GitLab instance (Phase 5) and a public release
-(Phase 5 publish).
+Alpha. CLI + library surface complete, build emits dual ESM + CJS via **tsup**,
+release infrastructure in place via [Changesets](https://github.com/changesets/changesets).
+The single `find-strings` command is feature-complete against the MVP plan;
+remaining work is end-to-end verification against a live GitLab instance.
 
 Both module formats are published from a single source tree:
 
@@ -443,6 +442,47 @@ Both resolve to the same public API (`findStrings`, `loadConfig`, types
 `FindStringsOptions` / `MatchResult`). The CJS variant is emitted as
 `dist/index.cjs` and the ESM variant as `dist/index.js`; types resolve via
 the `exports["."].types` field to `dist/index.d.ts`.
+
+## Releasing
+
+This package uses [Changesets](https://github.com/changesets/changesets) for
+versioning and publishing. The flow is fully manual — no CI automation.
+
+### Per-PR: declare your change
+
+Inside the branch that contains your change:
+
+```bash
+yarn changeset
+```
+
+Answer the prompts (bump type — `patch` / `minor` / `major`; affected packages
+— `gitlab-analyzer`; short description). This writes a `.changeset/<random>.md`
+file. Commit that file inside the same PR.
+
+### Cut a release
+
+On `main`, after merging one or more PRs with changeset entries:
+
+```bash
+yarn version
+```
+
+This runs the test suite, builds, and applies all pending changesets: bumps
+`version` in `package.json`, regenerates `CHANGELOG.md`, and deletes the
+consumed `.changeset/*.md` files.
+
+Review the diff, commit it (`chore: release <version>`), and push.
+
+### Publish to npm
+
+```bash
+yarn publish-version
+```
+
+Runs tests + build + `changeset publish`. Requires you to be logged into the
+npm CLI (`npm login`) with publish rights on the `gitlab-analyzer` package.
+Also pushes the version tag to the git remote.
 
 ## License
 
