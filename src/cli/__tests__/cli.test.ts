@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   findStrings: vi.fn(),
   writeFile: vi.fn(),
+  mkdir: vi.fn(),
 }));
 
 vi.mock('../../config/load.ts', () => ({
@@ -21,6 +22,7 @@ vi.mock('../../commands/find-strings.ts', () => ({
 
 vi.mock('node:fs/promises', () => ({
   writeFile: mocks.writeFile,
+  mkdir: mocks.mkdir,
 }));
 
 import { buildProgram, runCli, runFindStrings, resolveOptions } from '../../cli.ts';
@@ -83,6 +85,7 @@ describe('cli > buildProgram', () => {
     mocks.loadConfig.mockReset();
     mocks.findStrings.mockReset();
     mocks.writeFile.mockReset();
+    mocks.mkdir.mockReset();
   });
 
   afterEach(() => {
@@ -419,6 +422,7 @@ describe('cli > runCli', () => {
     mocks.loadConfig.mockReset();
     mocks.findStrings.mockReset();
     mocks.writeFile.mockReset();
+    mocks.mkdir.mockReset();
   });
 
   afterEach(() => {
@@ -497,6 +501,7 @@ describe('cli > runFindStrings (exported helper)', () => {
     mocks.loadConfig.mockReset();
     mocks.findStrings.mockReset();
     mocks.writeFile.mockReset();
+    mocks.mkdir.mockReset();
   });
 
   afterEach(() => {
@@ -599,6 +604,49 @@ describe('cli > runFindStrings (exported helper)', () => {
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
     expect(mocks.writeFile.mock.calls[0][0]).toBe('/tmp/from-config.json');
     expect(result.outputPath).toBe('/tmp/from-config.json');
+  });
+
+  it('creates the parent directory of --output recursively before writing', async () => {
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    mocks.findStrings.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+    mocks.mkdir.mockResolvedValue(undefined);
+
+    // Nested output path whose intermediate directories don't exist yet.
+    // We use tmpdir() as the anchor so the test stays hermetic regardless
+    // of cwd, but everything below it is unique to this run and will be
+    // removed by `os.tmpdir()` cleanup eventually.
+    const nestedDir = path.join(
+      os.tmpdir(),
+      `gitlab-analyzer-mkdir-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      'level2',
+    );
+    const outputPath = path.join(nestedDir, 'result.json');
+
+    const result = await runFindStrings(['x'], { output: outputPath });
+
+    // mkdir must be called exactly once, with the parent dir of outputPath
+    // and recursive:true so any missing intermediate levels are created too.
+    expect(mocks.mkdir).toHaveBeenCalledTimes(1);
+    expect(mocks.mkdir).toHaveBeenCalledWith(path.dirname(outputPath), {
+      recursive: true,
+    });
+
+    // writeFile still runs after mkdir, against the original output path.
+    expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+    expect(mocks.writeFile.mock.calls[0][0]).toBe(outputPath);
+    expect(result.outputPath).toBe(outputPath);
+  });
+
+  it('does not call mkdir when --output is omitted (stdout path)', async () => {
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    mocks.findStrings.mockResolvedValue([]);
+
+    const result = await runFindStrings(['x'], {});
+
+    expect(mocks.mkdir).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(result.outputPath).toBeUndefined();
   });
 });
 

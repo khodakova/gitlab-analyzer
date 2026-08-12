@@ -2,7 +2,8 @@
 // in `tsup.config.ts`. Keeping it out of source keeps the file lintable as
 // a normal ES module (no execute-permission assumptions).
 import { Command, Option, CommanderError } from 'commander';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   findStrings,
@@ -240,6 +241,13 @@ export async function runFindStrings(
   const outputPath = resolved.output;
 
   if (outputPath) {
+    // Ensure the parent directory exists, recursively. `--output ./a/b/c.json`
+    // creates `./a`, `./a/b`, and `./a/b/c.json` in one shot — saves the user
+    // from having to mkdir before every scan, and keeps batch scripts tidy.
+    // `{ recursive: true }` is a no-op when the directory already exists, so
+    // it's safe to call unconditionally. `dirname('foo.json')` returns '.',
+    // and `mkdir('.', { recursive: true })` is also a no-op.
+    await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, json, 'utf-8');
     process.stderr.write(
       `Wrote ${results.length} result(s) to ${outputPath}\n`,
