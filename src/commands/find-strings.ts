@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import pLimit from 'p-limit';
 import { getProjectArchive } from '../api/project-archive.ts';
 import { getAllProjects } from '../utils/get-projects.ts';
-import type { SearchProjectsItem } from '../types.ts';
+import type { SearchProjectsItem, RepoInfo } from '../types.ts';
 
 /**
  * Input options for {@link findStrings}.
@@ -38,6 +38,14 @@ export type FindStringsOptions = {
    * case-sensitively against `project.name`.
    */
   excludeRepos?: readonly string[];
+
+  /**
+   * Optional explicit allowlist of repositories to search. When provided,
+   * only projects whose `id` OR `name` matches an entry are scanned. Applied
+   * AFTER `excludeRepos` (intersection). Omit (or `undefined`) to keep the
+   * legacy behaviour: search every project not excluded by `excludeRepos`.
+   */
+  selectedRepos?: readonly RepoInfo[];
 
   /**
    * Substring filter for file paths inside the archive. Default `'/src/'`.
@@ -219,13 +227,18 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
   const pathFilter = opts.pathFilter ?? '/src/';
   const includeTests = opts.includeTests ?? false;
   const excludeRepos = opts.excludeRepos ?? [];
+  const selectedRepos = opts.selectedRepos;
 
   const allProjects = await getAllProjects(opts.repoNameFilter ?? '');
   const projects = allProjects.filter(
     (project): project is SearchProjectsItem & { name: string } =>
       project.name !== null &&
       project.name.length > 0 &&
-      !excludeRepos.includes(project.name),
+      !excludeRepos.includes(project.name) &&
+      (selectedRepos === undefined ||
+        selectedRepos.some(
+          (s) => s.id === project.id || s.name === project.name,
+        )),
   );
 
   const total = projects.length;

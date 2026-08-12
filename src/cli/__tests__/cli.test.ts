@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   findStrings: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
+  repoSelect: vi.fn(),
+  getAllProjects: vi.fn(),
 }));
 
 vi.mock('../../config/load.ts', () => ({
@@ -23,6 +25,15 @@ vi.mock('../../commands/find-strings.ts', () => ({
 vi.mock('node:fs/promises', () => ({
   writeFile: mocks.writeFile,
   mkdir: mocks.mkdir,
+}));
+
+vi.mock('../../utils/repo-select.ts', () => ({
+  repoSelect: mocks.repoSelect,
+  enquirerRepoSelect: vi.fn(),
+}));
+
+vi.mock('../../utils/get-projects.ts', () => ({
+  getAllProjects: mocks.getAllProjects,
 }));
 
 import { buildProgram, runCli, runFindStrings, resolveOptions } from '../../cli.ts';
@@ -86,6 +97,12 @@ describe('cli > buildProgram', () => {
     mocks.findStrings.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
+    mocks.repoSelect.mockReset();
+    mocks.getAllProjects.mockReset();
+    // runFindStrings now fetches the project list to build the repo report /
+    // picker. Default to an empty list; interactive & headless-list tests
+    // override this with their own fixtures.
+    mocks.getAllProjects.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -122,6 +139,7 @@ describe('cli > buildProgram', () => {
       expect(out).toContain('--include-tests');
       expect(out).toContain('--output');
       expect(out).toContain('--concurrency');
+      expect(out).toContain('--interactive');
       // Plus the positional argument and global --help.
       expect(out).toContain('<strings...>');
       expect(out).toContain('--help');
@@ -355,6 +373,79 @@ describe('cli > buildProgram', () => {
     });
   });
 
+  describe('--interactive with repo selection', () => {
+    it('does NOT call repoSelect (headless) when --interactive is absent', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+      mocks.getAllProjects.mockResolvedValue([]);
+      mocks.repoSelect.mockResolvedValue([]);
+
+      const program = buildProgram();
+      await program.parseAsync([
+        'node', 'gitlab-analyzer', 'find-strings', 'needle',
+        '--output', path.join(os.tmpdir(), 'headless.json'),
+      ]);
+
+      expect(mocks.repoSelect).not.toHaveBeenCalled();
+    });
+
+    it('runs the picker and passes selectedRepos to findStrings when --interactive', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+        { id: 2, name: 'beta', description: null },
+      ]);
+      mocks.repoSelect.mockResolvedValue([
+        { id: 1, name: 'alpha' },
+        { id: 2, name: 'beta' },
+      ]);
+
+      const program = buildProgram();
+      await program.parseAsync([
+        'node', 'gitlab-analyzer', 'find-strings', 'needle', '--interactive',
+        '--output', path.join(os.tmpdir(), 'interactive.json'),
+      ]);
+
+      expect(mocks.repoSelect).toHaveBeenCalledTimes(1);
+      expect(mocks.findStrings).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findStrings.mock.calls[0][0];
+      expect(passedOpts.selectedRepos).toEqual([
+        { id: 1, name: 'alpha' },
+        { id: 2, name: 'beta' },
+      ]);
+    });
+
+    it('cancels (exit 0, no search, message to stderr) when the user selects nothing', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+      ]);
+      mocks.repoSelect.mockResolvedValue([]);
+
+      // Drive runFindStrings directly (as the action handler does) so we can
+      // assert on process.exit(0) without the action-handler catch re-wrapping
+      // the mocked exit into a generic runtime error (exit 1).
+      await runFindStrings(['needle'], { interactive: true })
+        .then(() => {
+          throw new Error('expected process.exit(0) to be called');
+        })
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(0)') return;
+          throw e;
+        });
+
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(mocks.findStrings).not.toHaveBeenCalled();
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toMatch(/поиск|репозитори|cancel|отмен|ничего/i);
+    });
+  });
+
   describe('runtime error handling', () => {
     it('catches missing-required errors from resolveOptions, prints to stderr, and exits 1', async () => {
       // Post-refactor: loadConfig() no longer rejects on missing config
@@ -423,6 +514,12 @@ describe('cli > runCli', () => {
     mocks.findStrings.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
+    mocks.repoSelect.mockReset();
+    mocks.getAllProjects.mockReset();
+    // runFindStrings now fetches the project list to build the repo report /
+    // picker. Default to an empty list; interactive & headless-list tests
+    // override this with their own fixtures.
+    mocks.getAllProjects.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -502,6 +599,12 @@ describe('cli > runFindStrings (exported helper)', () => {
     mocks.findStrings.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
+    mocks.repoSelect.mockReset();
+    mocks.getAllProjects.mockReset();
+    // runFindStrings now fetches the project list to build the repo report /
+    // picker. Default to an empty list; interactive & headless-list tests
+    // override this with their own fixtures.
+    mocks.getAllProjects.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -646,6 +749,26 @@ describe('cli > runFindStrings (exported helper)', () => {
 
     expect(mocks.mkdir).not.toHaveBeenCalled();
     expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(result.outputPath).toBeUndefined();
+  });
+
+  it('prints the resolved repo list to stderr in headless mode', async () => {
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    mocks.getAllProjects.mockResolvedValue([
+      { id: 1, name: 'alpha', description: null },
+      { id: 2, name: 'beta', description: null },
+      { id: 3, name: 'skip', description: null },
+    ]);
+    mocks.findStrings.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+
+    const result = await runFindStrings(['x'], {});
+
+    const stderrText = collectWriteCalls(stderrSpy);
+    expect(stderrText).toContain('Будет выполнен поиск по 3 репозиториям:');
+    expect(stderrText).toContain('alpha');
+    expect(stderrText).toContain('beta');
+    expect(stderrText).toContain('skip');
     expect(result.outputPath).toBeUndefined();
   });
 });

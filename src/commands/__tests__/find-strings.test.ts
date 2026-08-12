@@ -507,4 +507,86 @@ describe('findStrings', () => {
       ).resolves.toHaveLength(1);
     });
   });
+
+  describe('case 9: selectedRepos intersection filter', () => {
+    it('searches only repos present (by id or name) in selectedRepos', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'keep-by-id' }),
+        project({ id: 2, name: 'keep-by-name' }),
+        project({ id: 3, name: 'drop-me' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        selectedRepos: [
+          { id: 1, name: 'keep-by-id' },     // matches by id
+          { id: 999, name: 'keep-by-name' }, // matches by name (id differs)
+        ],
+      });
+
+      expect(getProjectArchiveMock).toHaveBeenCalledTimes(2);
+      expect(results.map((r) => r.projectName).sort()).toEqual(['keep-by-id', 'keep-by-name']);
+    });
+
+    it('applies excludeRepos first, then intersects with selectedRepos', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'excluded' }),
+        project({ id: 2, name: 'selected' }),
+        project({ id: 3, name: 'neither' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        excludeRepos: ['excluded'],
+        selectedRepos: [{ id: 2, name: 'selected' }],
+      });
+
+      // 'excluded' dropped by excludeRepos; only 'selected' in the intersection.
+      expect(getProjectArchiveMock).toHaveBeenCalledTimes(1);
+      expect(results.map((r) => r.projectName)).toEqual(['selected']);
+    });
+
+    it('returns [] without fetching any archive when selectedRepos matches nothing', async () => {
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'only-one' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(null);
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        selectedRepos: [{ id: 999, name: 'does-not-exist' }],
+      });
+
+      expect(getProjectArchiveMock).not.toHaveBeenCalled();
+      expect(results).toEqual([]);
+    });
+
+    it('keeps legacy behaviour (all repos) when selectedRepos is undefined', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'a' }),
+        project({ id: 2, name: 'b' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        // no selectedRepos
+      });
+
+      expect(getProjectArchiveMock).toHaveBeenCalledTimes(2);
+      expect(results).toHaveLength(2);
+    });
+  });
 });

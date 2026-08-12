@@ -1,3 +1,15 @@
+/**
+ * Lightweight identifier for a single GitLab project, used when the caller
+ * wants to narrow a search to a specific subset of repositories (e.g. the
+ * `selectedRepos` option of `findStrings` or the interactive picker).
+ */
+export type RepoInfo = {
+  /** GitLab project ID. */
+  id: number;
+  /** Project name as returned by GitLab. Always non-null on the paths that build RepoInfo. */
+  name: string;
+};
+
 export type SearchProjectsItem = {
   id: number,
   description: string | null,

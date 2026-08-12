@@ -204,8 +204,28 @@ Options:
       --include-tests      Include *.test.* files in the search
   -o, --output <path>      Path to write JSON results; omit to write to stdout
   -c, --concurrency <n>    Maximum number of parallel archive-fetch + zip-parse tasks
+      --interactive        Let you choose which repositories to search
+                           (space toggles a repo, Enter confirms); empty
+                           selection cancels the run
   -h, --help               display help for command
 ```
+
+### Interactive repo selection
+
+By default `find-strings` searches every reachable project (after
+`excludeRepos`/`--exclude`). Pass `--interactive` to pick the repos yourself
+before the search runs:
+
+```bash
+gitlab-analyzer find-strings 'TODO' --interactive
+```
+
+An `enquirer` multi-select list shows every repo initially selected. Use
+**space** to toggle a repo, **arrows** to move, **Enter** to confirm. The
+search then runs only against the repos you left selected. If you deselect
+every repo and confirm, the run is cancelled (message on stderr, exit code 0,
+no search). In non-interactive (default) mode the resolved repo list is printed
+to stderr before searching so you can see where the search will run.
 
 ### Example invocation
 
@@ -274,6 +294,10 @@ const results: MatchResult[] = await findStrings({
   branch: config.defaults.branch,
   repoNameFilter: 'frontend',
   excludeRepos: ['archived-repo'],
+  selectedRepos: [
+    { id: 42, name: 'frontend-app' },
+    { id: 7, name: 'backend-api' },
+  ],
   pathFilter: '/src/',
   includeTests: false,
   concurrency: 5,

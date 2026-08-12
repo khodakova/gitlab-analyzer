@@ -13,6 +13,19 @@ import {
 import { loadConfig } from './config/load.ts';
 import type { GitlabAnalyzerConfig } from './config/schema.ts';
 import { axiosInstance } from './api/config.ts';
+import { getAllProjects } from './utils/get-projects.ts';
+import { repoSelect } from './utils/repo-select.ts';
+import type { RepoInfo } from './types.ts';
+
+/**
+ * Thin output helper for CLI-level lines that must always go to stderr
+ * (progress, summaries, errors, the pre-search repo list). Kept behind one
+ * function so a future `--enable-logs` flag can add verbosity levels without
+ * touching every call site.
+ */
+function report(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
 
 /**
  * CLI + programmatic entry for `gitlab-analyzer`.
@@ -67,6 +80,7 @@ export type FindStringsCliOptions = {
   includeTests?: boolean;
   output?: string;
   concurrency?: number;
+  interactive?: boolean;
 };
 
 /**
@@ -90,6 +104,8 @@ export type ResolvedFindStringsOptions = {
   concurrency: number;
   /** Output file path; `undefined` → stdout. */
   output: string | undefined;
+  /** Whether to prompt the user to pick repos before searching. */
+  interactive: boolean;
 };
 
 /**
@@ -176,6 +192,7 @@ export function resolveOptions(
     concurrency:
       cliOpts.concurrency ?? cmdDefaults?.concurrency ?? 5,
     output: cliOpts.output ?? cmdDefaults?.output,
+    interactive: cliOpts.interactive ?? false,
   };
 
   if (errors.length > 0) {
@@ -222,16 +239,52 @@ export async function runFindStrings(
   // assignment is a no-op.
   axiosInstance.defaults.baseURL = resolved.gitlabUrl;
 
+  // Resolve the repository set (already filtered by excludeRepos — this must
+  // mirror findStrings' filter so the picker / printed list matches what will
+  // actually be searched). Used for the interactive picker and the headless
+  // "will search these repos" report. One extra projects-list fetch is a
+  // deliberate trade-off to keep `findStrings` pure (no console/process calls).
+  const allProjects = await getAllProjects(resolved.repoNameFilter);
+  const excludeList = resolved.excludeRepos;
+  const filtered = allProjects.filter(
+    (project) =>
+      project.name !== null &&
+      project.name.length > 0 &&
+      !excludeList.includes(project.name),
+  );
+  const repos: RepoInfo[] = filtered.map((project) => ({
+    id: project.id,
+    name: project.name as string,
+  }));
+
+  let selectedRepos: RepoInfo[] | undefined;
+  if (resolved.interactive) {
+    selectedRepos = await repoSelect(repos);
+
+    if (selectedRepos.length === 0) {
+      report('Поиск отменён: не выбрано ни одного репозитория.');
+      process.exit(0);
+    }
+  } else {
+    // Headless info output: show where the search will run (stderr, so stdout
+    // JSON stays pipeable).
+    report(`Будет выполнен поиск по ${repos.length} репозиториям:`);
+    for (const repo of repos) {
+      report(repo.name);
+    }
+  }
+
   const findOpts: FindStringsOptions = {
     searchStrings: strings,
     branch: resolved.branch,
     repoNameFilter: resolved.repoNameFilter,
     excludeRepos: resolved.excludeRepos,
+    selectedRepos,
     pathFilter: resolved.pathFilter,
     includeTests: resolved.includeTests,
     concurrency: resolved.concurrency,
     onProgress: (done, total, currentRepo) => {
-      process.stderr.write(`[${done}/${total}] ${currentRepo}\n`);
+      report(`[${done}/${total}] ${currentRepo}`);
     },
   };
 
@@ -249,9 +302,7 @@ export async function runFindStrings(
     // and `mkdir('.', { recursive: true })` is also a no-op.
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, json, 'utf-8');
-    process.stderr.write(
-      `Wrote ${results.length} result(s) to ${outputPath}\n`,
-    );
+    report(`Wrote ${results.length} result(s) to ${outputPath}`);
   } else {
     process.stdout.write(`${json}\n`);
   }
@@ -309,6 +360,10 @@ export function buildProgram(): Command {
     .option('-b, --branch <name>', 'Branch to scan in every project')
     .option('-p, --path-filter <str>', 'Substring filter for file paths inside the archive')
     .option('--include-tests', 'Include *.test.* files in the search')
+    .option(
+      '--interactive',
+      'Let you choose which repositories to search (space toggles a repo, Enter confirms); empty selection cancels',
+    )
     .option('-o, --output <path>', 'Path to write JSON results; omit to write to stdout')
     .option(
       '-c, --concurrency <n>',

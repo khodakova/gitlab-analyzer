@@ -41,4 +41,5 @@ export type {
   FindStringsOptions,
   MatchResult,
 } from './commands/find-strings.ts';
+export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
