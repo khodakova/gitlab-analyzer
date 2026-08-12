@@ -472,6 +472,12 @@ This runs the test suite, builds, and applies all pending changesets: bumps
 `version` in `package.json`, regenerates `CHANGELOG.md`, and deletes the
 consumed `.changeset/*.md` files.
 
+> **Heads up:** `yarn version` includes an intermediate `changeset add` step
+> (see `package.json`), which is **interactive** — it will prompt for a bump
+> type and description before applying. If you only want to consume the
+> already-merged changeset entries from your PRs, run `yarn changeset version`
+> directly instead and skip the interactive step.
+
 Review the diff, commit it (`chore: release <version>`), and push.
 
 ### Publish to npm
@@ -482,7 +488,8 @@ yarn publish-version
 
 Runs tests + build + `changeset publish`. Requires you to be logged into the
 npm CLI (`npm login`) with publish rights on the `gitlab-analyzer` package.
-Also pushes the version tag to the git remote.
+Also creates a `v<version>` git tag locally — push it separately with
+`git push --tags` (or use `--follow-tags` on your next regular push).
 
 ## License
 
