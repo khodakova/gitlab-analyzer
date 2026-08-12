@@ -3,6 +3,7 @@
 // a normal ES module (no execute-permission assumptions).
 import { Command, Option, CommanderError } from 'commander';
 import { writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import {
   findStrings,
   type FindStringsOptions,
@@ -217,4 +218,26 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
     process.stderr.write(`Fatal: ${message}\n`);
     process.exit(1);
   }
+}
+
+/**
+ * Entry-point guard: invoke {@link runCli} only when this module is the
+ * program's entry script (`node dist/cli.js ...`).
+ *
+ * Without this guard, `node dist/cli.js --help` loads the module (which
+ * triggers transitive side-effects — e.g. `dotenv.config()` in
+ * `src/api/config.ts`) and then exits without ever calling {@link runCli},
+ * so commander never sees the argv and nothing happens.
+ *
+ * When the module is *imported* instead of executed (Vitest tests, downstream
+ * consumers pulling in `runCli` / `buildProgram` / `runFindStrings`), the
+ * guard is false and no CLI startup happens — so the public surface stays
+ * side-effect-free for library use, matching the original "no top-level
+ * side-effects" design note at the top of this file.
+ *
+ * Comparison uses `fileURLToPath(import.meta.url)` against `process.argv[1]`
+ * — the canonical "am I the entry script?" check for ESM Node programs.
+ */
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await runCli();
 }
