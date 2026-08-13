@@ -589,4 +589,58 @@ describe('findStrings', () => {
       expect(results).toHaveLength(2);
     });
   });
+
+  describe('case 10: pre-loaded projects option', () => {
+    it('does NOT call getAllProjects when projects is provided', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        projects: [project({ id: 1, name: 'preloaded', description: 'Desc' })],
+      });
+
+      expect(getAllProjectsMock).not.toHaveBeenCalled();
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        projectId: 1,
+        projectName: 'preloaded',
+        projectDescription: 'Desc',
+      });
+    });
+
+    it('ignores repoNameFilter for the fetch when projects is provided', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        repoNameFilter: 'frontend',
+        projects: [project({ id: 1, name: 'preloaded' })],
+      });
+
+      expect(getAllProjectsMock).not.toHaveBeenCalled();
+    });
+
+    it('applies excludeRepos and selectedRepos on top of provided projects', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        projects: [
+          project({ id: 1, name: 'keep' }),
+          project({ id: 2, name: 'excluded' }),
+          project({ id: 3, name: 'dropped-by-selected' }),
+        ],
+        excludeRepos: ['excluded'],
+        selectedRepos: [{ id: 1, name: 'keep' }],
+      });
+
+      expect(results.map((r) => r.projectName)).toEqual(['keep']);
+    });
+  });
 });

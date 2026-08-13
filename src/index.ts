@@ -8,11 +8,16 @@
  * import {
  *   findStrings,
  *   loadConfig,
+ *   configureLogger,
  *   type FindStringsOptions,
  *   type MatchResult,
  * } from 'gitlab-analyzer';
  *
  * const config = await loadConfig();
+ *
+ * // Optional: turn on debug/API logging for library calls.
+ * configureLogger({ enabled: true });
+ *
  * const results = await findStrings({
  *   searchStrings: ['my-secret'],
  *   branch: config.defaults.branch,
@@ -43,3 +48,4 @@ export type {
 } from './commands/find-strings.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
+export { configureLogger, logger } from './utils/logger.ts';

@@ -154,7 +154,8 @@ A more complete example showing every supported field:
     "repoNameFilter": "frontend",
     "excludeRepos": ["archived-repo", "wip-repo"],
     "pathFilter": "/src/",
-    "includeTests": false
+    "includeTests": false,
+    "enableLogs": true
   },
   "commands": {
     "find-strings": {
@@ -175,6 +176,7 @@ A more complete example showing every supported field:
 | `defaults.excludeRepos` | string[] | `[]` | Repo names to skip |
 | `defaults.pathFilter` | string | `"/src/"` (built-in) | Substring filter for file paths |
 | `defaults.includeTests` | boolean | `false` | Include `*.test.*` files |
+| `defaults.enableLogs` | boolean | `false` | Enable debug/API logging (see [Logging](#logging)) |
 | `commands.find-strings.concurrency` | int (positive) | `5` | Parallel requests to GitLab |
 | `commands.find-strings.output` | string | — | Path to write JSON results |
 
@@ -207,6 +209,8 @@ Options:
       --interactive        Let you choose which repositories to search
                            (space toggles a repo, Enter confirms); empty
                            selection cancels the run
+      --enable-logs        Enable debug/API logging (also enabled automatically
+                           with --interactive)
   -h, --help               display help for command
 ```
 
@@ -226,6 +230,42 @@ search then runs only against the repos you left selected. If you deselect
 every repo and confirm, the run is cancelled (message on stderr, exit code 0,
 no search). In non-interactive (default) mode the resolved repo list is printed
 to stderr before searching so you can see where the search will run.
+
+### Logging
+
+By default the tool is quiet (`--enable-logs` is **off**): progress
+(`[3/12] repo`), the summary line, and the pre-search repo list are always
+printed to **stderr**, but debug/API output is suppressed.
+
+Pass `--enable-logs` to turn on the full debug log: API request URLs,
+"Найдено репозиториев: N", per-project recovery messages (e.g. an archive
+that could not be fetched — the repo is skipped and the scan continues), and
+other informational steps. `--interactive` also enables the full log
+automatically (interactive mode needs it), so you don't have to pass
+`--enable-logs` separately.
+
+**Errors are always logged** to stderr regardless of the flag — a missing
+token/config, a failed project-list fetch, or any fatal error is never
+silently swallowed.
+
+The flag resolves through the standard precedence chain
+(CLI → env → config → default):
+
+- **CLI:** `--enable-logs`
+- **Env:** `ENABLE_LOGS=true` (truthy values: `1`, `true`, `yes`, `on`)
+- **Config:** `defaults.enableLogs`
+- **Default:** `false`
+
+```bash
+# Debug logging on for one run:
+gitlab-analyzer find-strings 'TODO' --enable-logs
+
+# Equivalent via env var:
+ENABLE_LOGS=true gitlab-analyzer find-strings 'TODO'
+```
+
+All log output goes to **stderr**, so the JSON result on stdout stays clean
+and pipeable.
 
 ### Example invocation
 
@@ -283,11 +323,15 @@ For custom post-processing, import the library functions directly:
 import {
   findStrings,
   loadConfig,
+  configureLogger,
   type FindStringsOptions,
   type MatchResult,
 } from 'gitlab-analyzer';
 
 const config = await loadConfig();
+
+// Optional: turn on debug/API logging for library calls.
+configureLogger({ enabled: true });
 
 const results: MatchResult[] = await findStrings({
   searchStrings: ['console.log', 'debugger'],
@@ -322,6 +366,18 @@ await fs.writeFile('my-custom-report.json', JSON.stringify(summary, null, 2));
 `process.exit` — it is a pure async function returning the result array. All
 output / progress / process management is the caller's responsibility when
 using the library API directly.
+
+The library also exports a small central logger — `configureLogger({ enabled })`
+and `logger` (`logger.debug(...)`, `logger.error(...)`). It mirrors the CLI's
+behavior: `debug` lines are silent unless enabled (default off), `error` lines
+always print, and both go to **stderr**. Enable it when you want the internal
+API/utils debug output for your own programmatic runs.
+
+`findStrings` accepts an optional `projects` array of already-fetched
+`SearchProjectsItem` objects. When provided, it skips the project-list fetch
+(so `getAllProjects` is not called again) and just runs the search over that
+list — useful when a caller has already loaded the repos (e.g. a CLI that built
+the picker). `excludeRepos` / `selectedRepos` are still applied on top.
 
 ## Output Schema
 

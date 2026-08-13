@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from './logger.ts';
 
 /**
  *
@@ -28,9 +29,9 @@ export function createDirAndSaveFileSync(dirPath: string, fileName: string, file
     if (!fs.existsSync(dirPath)) {
       // Создаем директорию рекурсивно
       fs.mkdirSync(dirPath, { recursive: true });
-      console.log(`Директория создана: ${dirPath}`);
+      logger.debug(`Директория создана: ${dirPath}`);
     } else {
-      console.log(`Директория уже существует: ${dirPath}`);
+      logger.debug(`Директория уже существует: ${dirPath}`);
     }
 
     // Полный путь к файлу
@@ -38,11 +39,11 @@ export function createDirAndSaveFileSync(dirPath: string, fileName: string, file
 
     // Записываем файл
     fs.writeFileSync(filePath, fileContent, 'utf8');
-    console.log(`Файл сохранен: ${filePath}`);
+    logger.debug(`Файл сохранен: ${filePath}`);
 
     return filePath;
   } catch (error) {
-    console.error('Ошибка:', (error as Error).message);
+    logger.error(`Ошибка: ${(error as Error).message}`);
     throw error;
   }
 }

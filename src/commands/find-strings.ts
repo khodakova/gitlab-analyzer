@@ -78,6 +78,16 @@ export type FindStringsOptions = {
    * @param currentRepo - Name of the project that just finished.
    */
   onProgress?: (done: number, total: number, currentRepo: string) => void;
+
+  /**
+   * Optional pre-loaded project list. When provided, `findStrings` does NOT
+   * fetch the project list from GitLab again (skips `getAllProjects`);
+   * `repoNameFilter` is then ignored for the fetch (it is assumed to already
+   * be applied to `projects`). Filtering by `excludeRepos` and `selectedRepos`
+   * is still applied on top. Lets a caller that already fetched the list
+   * (e.g. a CLI that built the repo picker) avoid a duplicate network call.
+   */
+  projects?: readonly SearchProjectsItem[];
 };
 
 /**
@@ -186,10 +196,12 @@ async function findStrInZip(
 /**
  * Search a GitLab instance for files containing any of the given search strings.
  *
- * Discovers projects via the GitLab API, fetches each project's archive
- * (capped at `opts.concurrency` parallel fetches via `p-limit`), unzips it
- * in-memory, and returns one {@link MatchResult} per project describing
- * which files matched which search strings.
+ * Discovers projects via the GitLab API (unless `opts.projects` is provided,
+ * in which case that pre-loaded list is used and no project fetch happens),
+ * fetches each project's archive (capped at `opts.concurrency` parallel
+ * fetches via `p-limit`), unzips it in-memory, and returns one
+ * {@link MatchResult} per project describing which files matched which search
+ * strings.
  *
  * The function is intentionally pure: no `console.*` output, no file
  * writes, no `process.exit`. All progress reporting goes through
@@ -202,8 +214,9 @@ async function findStrInZip(
  *   (projects whose archive fetch failed are omitted). Order is not
  *   guaranteed — sorting is the caller's job.
  * @throws Re-throws errors from `getAllProjects` (network/auth issues with
- *   the projects-list endpoint). Archive-parse failures are swallowed
- *   per-project and surfaced as `resultsLength: 0`.
+ *   the projects-list endpoint) — only when `opts.projects` is not provided.
+ *   Archive-parse failures are swallowed per-project and surfaced as
+ *   `resultsLength: 0`.
  *
  * @example
  * ```ts
@@ -229,7 +242,9 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
   const excludeRepos = opts.excludeRepos ?? [];
   const selectedRepos = opts.selectedRepos;
 
-  const allProjects = await getAllProjects(opts.repoNameFilter ?? '');
+  const allProjects =
+    opts.projects ??
+    (await getAllProjects(opts.repoNameFilter ?? ''));
   const projects = allProjects.filter(
     (project): project is SearchProjectsItem & { name: string } =>
       project.name !== null &&

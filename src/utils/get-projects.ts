@@ -3,6 +3,7 @@ import { axiosErrorBody, axiosInstance } from '../api/config.ts';
 import { SearchProjectsItem } from '../types.ts';
 import axios from 'axios';
 import { red } from 'colorette';
+import { logger } from './logger.ts';
 
 async function getProjectsByNamespaceQuery(params: { search?: string | null, page?: number, perPage?: number }) {
   const query = getQueryString({
@@ -49,7 +50,7 @@ export async function getAllProjects(search?: string | null) {
     ...resultsOnRestPages,
   ];
 
-  console.log('Найдено репозиториев:', projects.length);
+  logger.debug(`Найдено репозиториев: ${projects.length}`);
 
   return projects;
 }

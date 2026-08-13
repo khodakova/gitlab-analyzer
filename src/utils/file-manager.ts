@@ -1,5 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { logger } from './logger.ts';
 
 interface SaveOptions {
   encoding?: BufferEncoding;
@@ -60,11 +61,11 @@ export class FileManager {
 
       // Записываем файл
       await fs.writeFile(filePath, content, { encoding, mode, flag });
-      console.log(`Файл успешно сохранен: ${filePath}`);
+      logger.debug(`Файл успешно сохранен: ${filePath}`);
 
       return filePath;
     } catch (error) {
-      console.error('Ошибка при сохранении файла:', (error as Error).message);
+      logger.error(`Ошибка при сохранении файла: ${(error as Error).message}`);
       throw error;
     }
   }
@@ -81,12 +82,12 @@ export class FileManager {
         const filePath = path.join(dirPath, fileName);
         await fs.writeFile(filePath, content, 'utf8');
         results.push(filePath);
-        console.log(`Создан файл: ${filePath}`);
+        logger.debug(`Создан файл: ${filePath}`);
       }
 
       return results;
     } catch (error) {
-      console.error('Ошибка при создании файлов:', error);
+      logger.error(`Ошибка при создании файлов: ${String(error)}`);
       throw error;
     }
   }

@@ -37,6 +37,7 @@ vi.mock('../../utils/get-projects.ts', () => ({
 }));
 
 import { buildProgram, runCli, runFindStrings, resolveOptions } from '../../cli.ts';
+import * as loggerModule from '../../utils/logger.ts';
 
 /**
  * Default env values for tests. Set in the file-level `beforeEach` below so
@@ -140,6 +141,7 @@ describe('cli > buildProgram', () => {
       expect(out).toContain('--output');
       expect(out).toContain('--concurrency');
       expect(out).toContain('--interactive');
+      expect(out).toContain('--enable-logs');
       // Plus the positional argument and global --help.
       expect(out).toContain('<strings...>');
       expect(out).toContain('--help');
@@ -752,24 +754,81 @@ describe('cli > runFindStrings (exported helper)', () => {
     expect(result.outputPath).toBeUndefined();
   });
 
-  it('prints the resolved repo list to stderr in headless mode', async () => {
+    it('prints the resolved repo list to stderr in headless mode', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+        { id: 2, name: 'beta', description: null },
+        { id: 3, name: 'skip', description: null },
+      ]);
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindStrings(['x'], {});
+
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('Будет выполнен поиск по 3 репозиториям:');
+      expect(stderrText).toContain('alpha');
+      expect(stderrText).toContain('beta');
+      expect(stderrText).toContain('skip');
+      expect(result.outputPath).toBeUndefined();
+    });
+
+    it('passes the pre-filtered project list to findStrings (no duplicate fetch)', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: 'A' },
+        { id: 2, name: 'beta', description: 'B' },
+        { id: 3, name: 'skip', description: 'S' },
+      ]);
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindStrings(['x'], { exclude: ['skip'] });
+
+      // getAllProjects is fetched exactly once (no duplicate list request).
+      expect(mocks.getAllProjects).toHaveBeenCalledTimes(1);
+
+      // findStrings receives `projects` = the full list minus excluded repos.
+      expect(mocks.findStrings).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findStrings.mock.calls[0][0];
+      expect(passedOpts.projects).toEqual([
+        { id: 1, name: 'alpha', description: 'A' },
+        { id: 2, name: 'beta', description: 'B' },
+      ]);
+    });
+
+  it('enables the central logger when --interactive is set (logger wiring)', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.getAllProjects.mockResolvedValue([
-      { id: 1, name: 'alpha', description: null },
-      { id: 2, name: 'beta', description: null },
-      { id: 3, name: 'skip', description: null },
-    ]);
+    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.repoSelect.mockResolvedValue([{ id: 1, name: 'alpha' }]);
     mocks.findStrings.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['x'], {});
+    const configureSpy = vi
+      .spyOn(loggerModule, 'configureLogger')
+      .mockImplementation(() => {});
 
-    const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('Будет выполнен поиск по 3 репозиториям:');
-    expect(stderrText).toContain('alpha');
-    expect(stderrText).toContain('beta');
-    expect(stderrText).toContain('skip');
-    expect(result.outputPath).toBeUndefined();
+    await runFindStrings(['x'], { interactive: true });
+
+    expect(configureSpy).toHaveBeenCalledWith({ enabled: true });
+    configureSpy.mockRestore();
+  });
+
+  it('keeps the central logger disabled when neither --enable-logs nor --interactive', async () => {
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.findStrings.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+
+    const configureSpy = vi
+      .spyOn(loggerModule, 'configureLogger')
+      .mockImplementation(() => {});
+
+    await runFindStrings(['x'], {});
+
+    expect(configureSpy).toHaveBeenCalledWith({ enabled: false });
+    configureSpy.mockRestore();
   });
 });
 
@@ -935,6 +994,72 @@ describe('cli > resolveOptions (precedence: CLI > env > config > default)', () =
 
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://config-gitlab.example.com');
+    });
+  });
+
+  describe('precedence — enableLogs (CLI > env > config > false)', () => {
+    afterEach(() => {
+      delete process.env.ENABLE_LOGS;
+    });
+
+    it('defaults to false when no source provides it', () => {
+      delete process.env.ENABLE_LOGS;
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(false);
+    });
+
+    it('reads ENABLE_LOGS=true from env when CLI and config are silent', () => {
+      process.env.ENABLE_LOGS = 'true';
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(true);
+    });
+
+    it('treats ENABLE_LOGS=1 as truthy', () => {
+      process.env.ENABLE_LOGS = '1';
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(true);
+    });
+
+    it('treats ENABLE_LOGS=false as falsy', () => {
+      process.env.ENABLE_LOGS = 'false';
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(false);
+    });
+
+    it('falls back to config.defaults.enableLogs when CLI/env are silent', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, enableLogs: true },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(true);
+    });
+
+    it('CLI flag --enable-logs wins over env ENABLE_LOGS=false', () => {
+      process.env.ENABLE_LOGS = 'false';
+      const result = resolveOptions(['x'], { enableLogs: true }, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(true);
+    });
+
+    it('CLI flag enableLogs=false wins over env ENABLE_LOGS=true', () => {
+      process.env.ENABLE_LOGS = 'true';
+      const result = resolveOptions(['x'], { enableLogs: false }, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.enableLogs).toBe(false);
     });
   });
 

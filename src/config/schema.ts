@@ -17,6 +17,7 @@ const DefaultsSchema = z.object({
   excludeRepos: z.array(z.string()).default([]),
   pathFilter: z.string().optional(),
   includeTests: z.boolean().default(false),
+  enableLogs: z.boolean().default(false),
 });
 
 const FindStringsCommandSchema = z.object({
@@ -34,6 +35,7 @@ export const GitlabAnalyzerConfigSchema = z.object({
     branch: 'develop',
     excludeRepos: [] as string[],
     includeTests: false,
+    enableLogs: false,
   })),
   commands: z.object({
     'find-strings': FindStringsCommandSchema.default(() => ({

@@ -80,6 +80,7 @@ describe('GitlabAnalyzerConfigSchema', () => {
         branch: 'develop',
         excludeRepos: [],
         includeTests: false,
+        enableLogs: false,
       });
     });
 
@@ -95,6 +96,21 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.defaults.branch).toBe('main');
       expect(parsed.defaults.excludeRepos).toEqual(['archived', 'wip']);
       expect(parsed.defaults.includeTests).toBe(false);
+    });
+
+    it('defaults enableLogs to false when defaults block is omitted', () => {
+      const parsed = GitlabAnalyzerConfigSchema.parse({});
+
+      expect(parsed.defaults.enableLogs).toBe(false);
+    });
+
+    it('preserves user-provided enableLogs: true', () => {
+      const parsed = GitlabAnalyzerConfigSchema.parse({
+        gitlab: { url: 'https://gitlab.com' },
+        defaults: { enableLogs: true },
+      });
+
+      expect(parsed.defaults.enableLogs).toBe(true);
     });
 
     it('applies commands.find-strings.concurrency default = 5', () => {
@@ -147,6 +163,7 @@ describe('GitlabAnalyzerConfigSchema', () => {
           excludeRepos: ['archived-repo', 'wip-repo'],
           pathFilter: '/src/',
           includeTests: false,
+          enableLogs: true,
         },
         commands: {
           'find-strings': {
@@ -166,6 +183,7 @@ describe('GitlabAnalyzerConfigSchema', () => {
           excludeRepos: ['archived-repo', 'wip-repo'],
           pathFilter: '/src/',
           includeTests: false,
+          enableLogs: true,
         },
         commands: {
           'find-strings': {

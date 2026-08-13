@@ -15,13 +15,15 @@ import type { GitlabAnalyzerConfig } from './config/schema.ts';
 import { axiosInstance } from './api/config.ts';
 import { getAllProjects } from './utils/get-projects.ts';
 import { repoSelect } from './utils/repo-select.ts';
+import { configureLogger, logger } from './utils/logger.ts';
 import type { RepoInfo } from './types.ts';
 
 /**
- * Thin output helper for CLI-level lines that must always go to stderr
- * (progress, summaries, errors, the pre-search repo list). Kept behind one
- * function so a future `--enable-logs` flag can add verbosity levels without
- * touching every call site.
+ * Thin output helper for CLI-level lines that must ALWAYS go to stderr and are
+ * NOT gated by `--enable-logs`: progress (`[3/12] repo`), summaries, and the
+ * pre-search repo list. These are user-facing status lines that should stay
+ * visible regardless of verbosity. Debug/API/recovery output lives in the
+ * central logger (`src/utils/logger.ts`) and is gated separately.
  */
 function report(line: string): void {
   process.stderr.write(`${line}\n`);
@@ -81,6 +83,7 @@ export type FindStringsCliOptions = {
   output?: string;
   concurrency?: number;
   interactive?: boolean;
+  enableLogs?: boolean;
 };
 
 /**
@@ -106,6 +109,8 @@ export type ResolvedFindStringsOptions = {
   output: string | undefined;
   /** Whether to prompt the user to pick repos before searching. */
   interactive: boolean;
+  /** Whether debug/API logging is enabled (CLI > ENABLE_LOGS > defaults.enableLogs). */
+  enableLogs: boolean;
 };
 
 /**
@@ -176,8 +181,24 @@ export function resolveOptions(
     });
   }
 
-  // Optional/derived with fallback chain: CLI > config > built-in default.
+  // Optional/derived with fallback chain: CLI > env > config > built-in default.
   const cmdDefaults = config.commands?.['find-strings'];
+
+  // `enableLogs` — CLI flag > ENABLE_LOGS env > config.defaults.enableLogs >
+  // built-in default (false). ENABLE_LOGS accepts '1', 'true', 'yes', 'on' as
+  // truthy (case-insensitive). An unset/empty ENABLE_LOGS contributes nothing
+  // (falls through to config), while any explicitly-set value (true or false)
+  // is authoritative over config.
+  let envEnableLogs: boolean | undefined;
+  const rawEnvEnableLogs = process.env.ENABLE_LOGS;
+  if (rawEnvEnableLogs !== undefined && rawEnvEnableLogs !== '') {
+    envEnableLogs = /^(1|true|yes|on)$/i.test(rawEnvEnableLogs);
+  }
+  const enableLogs =
+    cliOpts.enableLogs ??
+    envEnableLogs ??
+    config.defaults?.enableLogs ??
+    false;
 
   const resolved: ResolvedFindStringsOptions = {
     gitlabUrl: gitlabUrl as string, // safe: gated above; errors[] is non-empty if missing
@@ -193,6 +214,7 @@ export function resolveOptions(
       cliOpts.concurrency ?? cmdDefaults?.concurrency ?? 5,
     output: cliOpts.output ?? cmdDefaults?.output,
     interactive: cliOpts.interactive ?? false,
+    enableLogs,
   };
 
   if (errors.length > 0) {
@@ -231,6 +253,13 @@ export async function runFindStrings(
 
   const { resolved } = resolution;
 
+  // Enable the central logger for the whole process: debug/API/recovery logs
+  // are only printed when `--enable-logs` was resolved, OR when running
+  // interactively (interactive mode needs the full log to drive the picker).
+  // Must run before any API calls below so the debug lines they emit are
+  // visible/hidden correctly.
+  configureLogger({ enabled: resolved.enableLogs || resolved.interactive });
+
   // Propagate the resolved GitLab URL to the module-level axiosInstance so
   // HTTP requests go to the right host. Necessary when only `config.gitlab.url`
   // (not `GITLAB_URL` env) is set, since `axiosInstance` was created at module
@@ -241,9 +270,10 @@ export async function runFindStrings(
 
   // Resolve the repository set (already filtered by excludeRepos — this must
   // mirror findStrings' filter so the picker / printed list matches what will
-  // actually be searched). Used for the interactive picker and the headless
-  // "will search these repos" report. One extra projects-list fetch is a
-  // deliberate trade-off to keep `findStrings` pure (no console/process calls).
+  // actually be searched). This list is ALSO handed to `findStrings` via
+  // `projects` so it does not re-fetch the project list (avoiding a duplicate
+  // API call and a duplicated "Найдено репозиториев" debug line). Kept pure:
+  // findStrings still does its own exclude/selected filtering on top.
   const allProjects = await getAllProjects(resolved.repoNameFilter);
   const excludeList = resolved.excludeRepos;
   const filtered = allProjects.filter(
@@ -280,6 +310,7 @@ export async function runFindStrings(
     repoNameFilter: resolved.repoNameFilter,
     excludeRepos: resolved.excludeRepos,
     selectedRepos,
+    projects: filtered,
     pathFilter: resolved.pathFilter,
     includeTests: resolved.includeTests,
     concurrency: resolved.concurrency,
@@ -364,6 +395,10 @@ export function buildProgram(): Command {
       '--interactive',
       'Let you choose which repositories to search (space toggles a repo, Enter confirms); empty selection cancels',
     )
+    .option(
+      '--enable-logs',
+      'Enable debug/API logging (also enabled automatically with --interactive)',
+    )
     .option('-o, --output <path>', 'Path to write JSON results; omit to write to stdout')
     .option(
       '-c, --concurrency <n>',
@@ -375,7 +410,7 @@ export function buildProgram(): Command {
         await runFindStrings(strings, opts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`Error: ${message}\n`);
+        logger.error(`Error: ${message}`);
         process.exit(1);
       }
     });
@@ -427,7 +462,7 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
       process.exit(2);
     }
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`Fatal: ${message}\n`);
+    logger.error(`Fatal: ${message}`);
     process.exit(1);
   }
 }

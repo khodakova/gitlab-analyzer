@@ -43,15 +43,23 @@ describe('index > public API surface', () => {
     expect(mod.GitlabAnalyzerConfig).toBeUndefined();
   });
 
-  it('exposes the public runtime values (findStrings, loadConfig, coverage sentinel)', () => {
+  it('exposes the public runtime values (findStrings, loadConfig, logger, coverage sentinel)', () => {
     // The sentinel `__reExportSentinel` exists purely to anchor v8 coverage
     // on this pure-re-export file; assert it is present so future
     // refactors do not silently drop it.
     const exportedNames = Object.keys(indexModule).sort();
     expect(exportedNames).toEqual([
       '__reExportSentinel',
+      'configureLogger',
       'findStrings',
       'loadConfig',
+      'logger',
     ]);
+  });
+
+  it('re-exports the logger configuration helpers', () => {
+    expect(typeof indexModule.configureLogger).toBe('function');
+    expect(typeof indexModule.logger?.debug).toBe('function');
+    expect(typeof indexModule.logger?.error).toBe('function');
   });
 });

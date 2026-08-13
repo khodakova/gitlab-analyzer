@@ -36,6 +36,7 @@ describe('loadConfig', () => {
       expect(config.defaults.branch).toBe('develop');
       expect(config.defaults.excludeRepos).toEqual([]);
       expect(config.defaults.includeTests).toBe(false);
+      expect(config.defaults.enableLogs).toBe(false);
       expect(config.commands['find-strings'].concurrency).toBe(5);
     });
 
@@ -110,6 +111,21 @@ describe('loadConfig', () => {
       expect(config.defaults.includeTests).toBe(true);
       expect(config.commands['find-strings'].concurrency).toBe(10);
       expect(config.commands['find-strings'].output).toBe('./out.json');
+    });
+
+    it('preserves user-provided enableLogs: true', async () => {
+      searchMock.mockResolvedValue({
+        config: {
+          gitlab: { url: 'https://gitlab.example.com' },
+          defaults: { enableLogs: true },
+        },
+        isEmpty: false,
+        filepath: '/cwd/gitlab-analyzer.json',
+      } as never);
+
+      const config = await loadConfig();
+
+      expect(config.defaults.enableLogs).toBe(true);
     });
   });
 
