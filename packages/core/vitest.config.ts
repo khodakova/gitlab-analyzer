@@ -13,6 +13,10 @@ export default defineConfig({
         // not exercised directly — exclude them. The top-level
         // `src/index.ts` IS measured (it's the library's public surface).
         'src/*/index.ts',
+        // `src/internal.ts` is a pure re-export barrel (the
+        // `@gitlab-analyzer/core/internal` subpath) — same treatment as the
+        // sub-folder barrels.
+        'src/internal.ts',
       ],
       reporter: ['text', 'html', 'lcov'],
     },

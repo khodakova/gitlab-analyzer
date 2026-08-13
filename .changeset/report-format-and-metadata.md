@@ -1,5 +1,5 @@
 ---
-'gitlab-analyzer': minor
+'@gitlab-analyzer/core': minor
 ---
 
 Add report format selection and a self-describing output report.

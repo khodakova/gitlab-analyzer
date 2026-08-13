@@ -1,5 +1,5 @@
 ---
-'gitlab-analyzer': minor
+'@gitlab-analyzer/core': minor
 ---
 
 Add opt-in debug/API logging via `--enable-logs` (and `ENABLE_LOGS` env /

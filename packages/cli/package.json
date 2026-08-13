@@ -1,0 +1,60 @@
+{
+  "name": "gitlab-analyzer",
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khodakova/gitlab-analyzer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/khodakova/gitlab-analyzer/issues"
+  },
+  "homepage": "https://github.com/khodakova/gitlab-analyzer#readme",
+  "author": "khodakova",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "gitlab-analyzer": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "yarn run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@gitlab-analyzer/core": "0.0.0",
+    "commander": "15.0.0",
+    "enquirer": "^2.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "20",
+    "@vitest/coverage-v8": "4.1.10",
+    "tsup": "8.5.1",
+    "typescript": "5.7.3",
+    "vitest": "4.1.10"
+  }
+}
