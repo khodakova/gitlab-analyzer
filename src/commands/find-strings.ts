@@ -89,6 +89,16 @@ export type FindStringsOptions = {
   ) => void;
 
   /**
+   * Optional callback fired when a repository STARTS processing, before its
+   * archive is fetched. Useful for callers that render live progress while
+   * repos run concurrently — `onProgress` only fires when a repo FINISHES, so
+   * it cannot, on its own, tell you which repos are currently active. This
+   * hook fills that gap.
+   * @param repo - Name of the project that just started processing.
+   */
+  onRepoStart?: (repo: string) => void;
+
+  /**
    * Optional pre-loaded project list. When provided, `findStrings` does NOT
    * fetch the project list from GitLab again (skips `getAllProjects`);
    * `repoNameFilter` is then ignored for the fetch (it is assumed to already
@@ -270,6 +280,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
   const limit = pLimit(opts.concurrency ?? 5);
 
   const tasks = projects.map((project) => limit(async (): Promise<MatchResult | null> => {
+    opts.onRepoStart?.(project.name);
     let archive: Blob | ArrayBuffer | null;
     let errorMsg: string | undefined;
     try {

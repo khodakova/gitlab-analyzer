@@ -265,6 +265,31 @@ describe('findStrings', () => {
       const repos = calls.map(([, , repo]) => repo).sort();
       expect(repos).toEqual(['alpha', 'beta', 'gamma']);
     });
+
+    it('fires onRepoStart once per project before processing, when provided', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'alpha' }),
+        project({ id: 2, name: 'beta' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const started: string[] = [];
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        onRepoStart: (repo) => {
+          started.push(repo);
+        },
+      });
+
+      expect(started.sort()).toEqual(['alpha', 'beta']);
+
+      // onRepoStart is independent of onProgress: leaving onProgress unset
+      // must not throw, and onRepoStart still fires for every repo.
+      expect(started).toHaveLength(2);
+    });
   });
 
   describe('case 7: concurrency cap', () => {

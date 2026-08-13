@@ -17,17 +17,58 @@ import { axiosInstance } from './api/config.ts';
 import { getAllProjects } from './utils/get-projects.ts';
 import { repoSelect } from './utils/repo-select.ts';
 import { configureLogger, logger } from './utils/logger.ts';
+import { ProgressRenderer } from './utils/progress.ts';
 import type { RepoInfo } from './types.ts';
 
 /**
- * Thin output helper for CLI-level lines that must ALWAYS go to stderr and are
- * NOT gated by `--enable-logs`: progress (`[3/12] repo`), summaries, and the
- * pre-search repo list. These are user-facing status lines that should stay
+ * Single shared renderer for all CLI status output that goes to stderr and is
+ * NOT gated by `--enable-logs`: progress (in-place dynamic line), summaries,
+ * and the pre-search repo list. These are user-facing status lines that stay
  * visible regardless of verbosity. Debug/API/recovery output lives in the
  * central logger (`src/utils/logger.ts`) and is gated separately.
+ *
+ * The renderer is the single point of write for these lines: any static line
+ * it prints clears the active in-place progress line first, so a live frame
+ * never interleaves with ordinary output.
+ */
+const progress = new ProgressRenderer();
+
+/**
+ * Print a static (non-overwritten) status line to stderr. Routes through the
+ * {@link progress} renderer so any active dynamic progress line is cleared
+ * before this line is written.
  */
 function report(line: string): void {
-  process.stderr.write(`${line}\n`);
+  progress.static(line);
+}
+
+/**
+ * Compose the live progress frame shown on the single dynamic stderr line.
+ *
+ * - When no repo is active (e.g. a sequential finish, or the last repo just
+ *   finished) the frame is `[done/total] <last>`, matching the historical
+ *   `[3/12] my-frontend-app` format.
+ * - When one or more repos are actively being processed in parallel, the frame
+ *   lists them, because `onProgress` only fires on completion and cannot, on
+ *   its own, reveal what is currently running.
+ *
+ * @param done - Repos processed so far (1-based, from `onProgress`).
+ * @param total - Total repos to process.
+ * @param active - Repos currently being processed.
+ * @param last - The repo that most recently finished (only meaningful when
+ *   `active` is empty, e.g. a completed job in a sequential-style callback).
+ */
+function renderProgressFrame(
+  done: number,
+  total: number,
+  active: ReadonlySet<string>,
+  last?: string,
+): string {
+  const prefix = `[${done}/${total}]`;
+  if (active.size > 0) {
+    return `${prefix} · ${Array.from(active).join(', ')}`;
+  }
+  return last !== undefined ? `${prefix} ${last}` : prefix;
 }
 
 /**
@@ -543,6 +584,35 @@ export async function runFindStrings(
   // and the search results returned by findStrings (which omits errored repos).
   const repoErrors = new Map<string, string>();
 
+  // Set of repos currently being processed, fed by the new `onRepoStart` hook.
+  // Because analysis is parallel (`concurrency`, default 5), more than one repo
+  // can be active at once; the live progress line lists them all so it honestly
+  // reflects what is running rather than just the last one to finish.
+  const activeRepos = new Set<string>();
+
+  // Shared counters so `onRepoStart` / the spinner (which fire before/without a
+  // given repo incrementing `done`) can render `[done/total]` using the latest
+  // values reported by `onProgress` (whose `done`/`total` live inside its
+  // closure). Initialised to the repo count this run processes — mirrors
+  // findStrings' `total`, computed from the resolved/selected repo set.
+  const doneRef = { current: 0 };
+  const totalRef = { current: selectedRepos?.length ?? repos.length };
+
+  // Most recently finished repo — used to render `[done/total] <last>` when no
+  // repo is active (sequential-style progress, or between parallel finishes).
+  let lastDoneRepo: string | undefined;
+
+  // Single source of truth for the live frame, shared by the callbacks and the
+  // spinner timer so they always draw a consistent line.
+  const currentFrame = (): string =>
+    renderProgressFrame(doneRef.current, totalRef.current, activeRepos, lastDoneRepo);
+
+  // Animate the loader: while work is running, periodically redraw the current
+  // frame with the *same* label so `ProgressRenderer.spin` advances the glyph.
+  const spinnerTimer = setInterval(() => {
+    progress.spin(currentFrame());
+  }, 150);
+
   const findOpts: FindStringsOptions = {
     searchStrings: strings,
     branch: resolved.branch,
@@ -553,15 +623,41 @@ export async function runFindStrings(
     pathFilter: resolved.pathFilter,
     includeTests: resolved.includeTests,
     concurrency: resolved.concurrency,
+    onRepoStart: (repo) => {
+      activeRepos.add(repo);
+      progress.spin(currentFrame());
+    },
     onProgress: (done, total, currentRepo, error) => {
+      activeRepos.delete(currentRepo);
       if (error !== undefined) {
         repoErrors.set(currentRepo, error);
       }
-      report(`[${done}/${total}] ${currentRepo}`);
+      doneRef.current = done;
+      totalRef.current = total;
+      lastDoneRepo = currentRepo;
+      if (done >= total) {
+        // Last repo done — stop the spinner and pin the final frame as a
+        // permanent line so the log ends with a clean `[N/N] ...` before the
+        // summary.
+        clearInterval(spinnerTimer);
+        progress.finish(currentFrame());
+      } else {
+        progress.spin(currentFrame());
+      }
     },
   };
 
-  const results: MatchResult[] = await findStrings(findOpts);
+  let results: MatchResult[];
+  try {
+    results = await findStrings(findOpts);
+  } finally {
+    // Always stop the spinner timer — both on the normal path (where
+    // `onProgress` already finished/pinned the last frame via `progress.finish`)
+    // and on an exceptional path (e.g. a thrown error mid-run). `progress.clear`
+    // is a no-op when no live line is active, so it is safe to call here.
+    clearInterval(spinnerTimer);
+    progress.clear();
+  }
 
   // The set of repos actually scanned = selectedRepos in interactive mode, or
   // the full filtered list headless. Every scanned repo gets a report entry.
