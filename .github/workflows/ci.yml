@@ -24,6 +24,11 @@ jobs:
         with:
           node-version: 22
       - run: yarn install --frozen-lockfile
+      # Tests import @gitlab-analyzer/core via `vi.mock(..., importOriginal)`,
+      # which resolves through node's package `exports` -> `dist/`. Build first
+      # so packages/core/dist exists on the fresh checkout (bin.test.ts also
+      # expects dist/ to be built before `yarn test`).
+      - run: yarn build
       - run: yarn test
 
   typecheck:
