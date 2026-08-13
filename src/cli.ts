@@ -3,7 +3,8 @@
 // a normal ES module (no execute-permission assumptions).
 import { Command, Option, CommanderError } from 'commander';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   findStrings,
@@ -43,11 +44,11 @@ function report(line: string): void {
  * | 1    | Runtime error — failed to load config, GitLab API failure, I/O.  |
  * | 2    | Invalid CLI usage — commander-detected (unknown flag, missing arg). |
  *
- * **Stdout vs stderr:** the JSON result of `find-strings` is written to
- * `--output <path>` when provided (or the path from
- * `commands.find-strings.output` in the config file), and to stdout
- * otherwise. Progress (`[done/total] repo-name`) and error / summary lines
- * are always written to stderr so the JSON stays pipeable.
+ * **Stdout vs stderr:** the report (json or txt) is written to the file at
+ * `--output <path>` (or an auto-generated `find-strings-results-<DATE>.<ext>`
+ * name when none is given), and additionally to stdout when `--stdout` is
+ * passed. Progress (`[done/total] repo-name`), errors and summary lines are
+ * always written to stderr so the report stays clean/pipeable.
  *
  * **Runtime invocation:** the file shipped as `bin/gitlab-analyzer.js`
  * dynamically imports `./dist/cli.js` and calls the exported
@@ -84,6 +85,8 @@ export type FindStringsCliOptions = {
   concurrency?: number;
   interactive?: boolean;
   enableLogs?: boolean;
+  format?: 'txt' | 'json';
+  stdout?: boolean;
 };
 
 /**
@@ -105,12 +108,16 @@ export type ResolvedFindStringsOptions = {
   includeTests: boolean;
   /** Max parallel archive-fetch + zip-parse tasks. */
   concurrency: number;
-  /** Output file path; `undefined` → stdout. */
+  /** Output file path; `undefined` → auto-generated name. */
   output: string | undefined;
   /** Whether to prompt the user to pick repos before searching. */
   interactive: boolean;
   /** Whether debug/API logging is enabled (CLI > ENABLE_LOGS > defaults.enableLogs). */
   enableLogs: boolean;
+  /** Report format: `json` (default) or `txt`. */
+  format: 'txt' | 'json';
+  /** When true, also write the report to stdout (in addition to the file). */
+  stdout: boolean;
 };
 
 /**
@@ -215,6 +222,8 @@ export function resolveOptions(
     output: cliOpts.output ?? cmdDefaults?.output,
     interactive: cliOpts.interactive ?? false,
     enableLogs,
+    format: cliOpts.format ?? 'json',
+    stdout: cliOpts.stdout ?? false,
   };
 
   if (errors.length > 0) {
@@ -235,10 +244,231 @@ export function resolveOptions(
  *   any source. The message contains the full list of missing fields with
  *   guidance on how to satisfy each one.
  */
+/**
+ * Normalized report format, either the JSON object shape (default) or the
+ * human-readable text render.
+ */
+export type ReportFormat = 'txt' | 'json';
+
+/**
+ * A single repository entry inside the report's `repositories` array.
+ * Combines the per-repo identity/metadata with the search results and any
+ * error that occurred while fetching that repo's archive.
+ */
+export type ReportRepository = {
+  projectId: number;
+  projectName: string;
+  projectDescription: string | null;
+  webUrl: string | null;
+  branchExists: boolean;
+  error: string | null;
+  resultsLength: number;
+  results: MatchResult['results'];
+};
+
+/**
+ * Full report written to file/stdout. Replaces the old bare-array output so
+ * the report self-describes the run (when, which branch, which repos, which
+ * strings, filters) alongside the per-repo results.
+ */
+export type Report = {
+  metadata: {
+    generatedAt: string;
+    branch: string;
+    searchStrings: string[];
+    repoNameFilter: string | null;
+    pathFilter: string;
+    includeTests: boolean;
+    excludeRepos: string[];
+  };
+  repositories: ReportRepository[];
+};
+
+/**
+ * True when the error likely means "the requested branch does not exist" on
+ * that repo (GitLab returns HTTP 404 / "not found" for a missing sha).
+ * Used to drive `branchExists` in the report. This is a heuristic — a repo
+ * that is private/archived/removed can also yield 404.
+ */
+function isBranchMissingError(message: string): boolean {
+  return /\b404\b/i.test(message) || /not found/i.test(message);
+}
+
+/**
+ * True when `path` ends with the given extension (case-insensitive).
+ */
+function hasExtension(path: string, ext: string): boolean {
+  return extname(path).toLowerCase() === ext.toLowerCase();
+}
+
+/**
+ * Resolve the output path for the report.
+ *
+ * - If `--output` is provided, it is used verbatim (after a format/vs-extension
+ *   conflict check) and overrides any auto-generated name.
+ * - Otherwise an auto name `find-strings-results-<DATE>.<ext>` is generated in
+ *   the current directory; if a file with that name already exists a numeric
+ *   suffix is appended before the extension (`-1`, `-2`, …) until a free name
+ *   is found.
+ *
+ * @param output - Explicit `--output` path, or `undefined` for auto-naming.
+ * @param format - Report format, drives the extension of the auto name.
+ * @param date - Timestamp label embedded in the auto name.
+ * @returns The concrete path to write to.
+ */
+export function resolveOutputPath(
+  output: string | undefined,
+  format: ReportFormat,
+  date: string,
+): string {
+  if (output) {
+    return output;
+  }
+  const ext = format === 'txt' ? '.txt' : '.json';
+  const base = `find-strings-results-${date}${ext}`;
+  if (!existsSync(base)) {
+    return base;
+  }
+  // Version existing auto-named files: -1, -2, ... up to a free name.
+  const stem = `find-strings-results-${date}`;
+  let version = 1;
+  let candidate = `${stem}-${version}${ext}`;
+  while (existsSync(candidate)) {
+    version++;
+    candidate = `${stem}-${version}${ext}`;
+  }
+  return candidate;
+}
+
+/**
+ * Throw when `--format` conflicts with the extension of an explicit `--output`
+ * path (e.g. `--format txt -o result.json`). The user is expected to align
+ * format and extension; silently picking one would be surprising.
+ *
+ * @throws {Error} On a mismatch between format and the output path extension.
+ */
+export function assertFormatPathConsistency(
+  output: string | undefined,
+  format: ReportFormat,
+): void {
+  if (!output) {
+    return;
+  }
+  const ext = extname(output);
+  if (ext === '') {
+    // No extension — nothing to conflict with.
+    return;
+  }
+  const expected = format === 'txt' ? '.txt' : '.json';
+  if (!hasExtension(output, expected)) {
+    throw new Error(
+      `--format ${format} conflicts with output path "${output}" (expected ${expected} extension).`,
+    );
+  }
+}
+
+/**
+ * Render the report as human-readable text. Mirrors the JSON structure
+ * (metadata first, then per-repo results with full file content).
+ */
+export function renderReportTxt(report: Report): string {
+  const lines: string[] = [];
+  const { metadata, repositories } = report;
+
+  lines.push('GitLab strings report');
+  lines.push('====================');
+  lines.push(`Generated at: ${metadata.generatedAt}`);
+  lines.push(`Branch: ${metadata.branch}`);
+  lines.push(`Search strings: ${metadata.searchStrings.join(', ') || '(none)'}`);
+  lines.push(`Repo name filter: ${metadata.repoNameFilter ?? '(none)'}`);
+  lines.push(`Path filter: ${metadata.pathFilter}`);
+  lines.push(`Include tests: ${metadata.includeTests ? 'yes' : 'no'}`);
+  lines.push(
+    `Excluded repos: ${metadata.excludeRepos.length > 0 ? metadata.excludeRepos.join(', ') : '(none)'}`,
+  );
+  lines.push(
+    `Repositories scanned: ${repositories.length}`,
+  );
+  lines.push('');
+
+  for (const repo of repositories) {
+    lines.push(`---- ${repo.projectName} (id: ${repo.projectId}) ----`);
+    if (repo.projectDescription) {
+      lines.push(`Description: ${repo.projectDescription}`);
+    }
+    if (repo.webUrl) {
+      lines.push(`URL: ${repo.webUrl}`);
+    }
+    lines.push(`Branch exists: ${repo.branchExists ? 'yes' : 'no'}`);
+    if (repo.error) {
+      lines.push(`Error: ${repo.error}`);
+    }
+    lines.push(`Matches: ${repo.resultsLength} file(s)`);
+
+    for (const file of repo.results) {
+      lines.push('');
+      lines.push(`  > ${file.filename}`);
+      lines.push(`    matched: ${file.matches.join(', ')}`);
+      if (file.content.length > 0) {
+        for (const line of file.content) {
+          lines.push(`    ${line}`);
+        }
+      }
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Build the report object from the resolved options, the scanned repo list,
+ * the search results, and the per-repo error map gathered via `onProgress`.
+ *
+ * `repositories` lists EVERY repo that was actually scanned (selected in
+ * interactive mode, or the full filtered set headless), including those with
+ * zero matches and those that errored — so the report is a faithful audit of
+ * what was searched.
+ */
+export function buildReport(
+  resolvedOptions: Pick<
+    ResolvedFindStringsOptions,
+    'branch' | 'repoNameFilter' | 'pathFilter' | 'includeTests' | 'excludeRepos' | 'format' | 'stdout'
+  >,
+  strings: string[],
+  scannedRepos: ReportRepository[],
+): Report {
+  // scannedRepos is already the final, per-repo list the caller assembled.
+  return {
+    metadata: {
+      generatedAt: new Date().toISOString(),
+      branch: resolvedOptions.branch,
+      searchStrings: strings,
+      repoNameFilter: resolvedOptions.repoNameFilter ?? null,
+      pathFilter: resolvedOptions.pathFilter,
+      includeTests: resolvedOptions.includeTests,
+      excludeRepos: resolvedOptions.excludeRepos,
+    },
+    repositories: scannedRepos,
+  };
+}
+
+/**
+ * Internal: shared implementation invoked by the commander action handler.
+ *
+ * Exported separately so tests can drive the full pipeline (resolve options →
+ * run search → build report → write output) without spawning a child process.
+ *
+ * @returns Object containing the parsed report and the resolved output path
+ *   (or `undefined` if nothing was written to disk).
+ * @throws {Error} When one or more required options cannot be resolved from
+ *   any source, or when `--format` conflicts with an explicit `--output`
+ *   path extension.
+ */
 export async function runFindStrings(
   strings: string[],
   opts: FindStringsCliOptions,
-): Promise<{ results: MatchResult[]; outputPath: string | undefined }> {
+): Promise<{ report: Report; outputPath: string | undefined }> {
   const config = await loadConfig();
   const resolution = resolveOptions(strings, opts, config);
 
@@ -252,6 +482,10 @@ export async function runFindStrings(
   }
 
   const { resolved } = resolution;
+
+  // Format/extension consistency is validated early, before any network work —
+  // a silent mismatch would otherwise waste a full scan.
+  assertFormatPathConsistency(resolved.output, resolved.format);
 
   // Enable the central logger for the whole process: debug/API/recovery logs
   // are only printed when `--enable-logs` was resolved, OR when running
@@ -297,12 +531,17 @@ export async function runFindStrings(
     }
   } else {
     // Headless info output: show where the search will run (stderr, so stdout
-    // JSON stays pipeable).
+    // report stays clean/pipeable).
     report(`Будет выполнен поиск по ${repos.length} репозиториям:`);
     for (const repo of repos) {
       report(repo.name);
     }
   }
+
+  // Per-repo error map, fed by onProgress's new `error` argument. Each repo is
+  // keyed by name so we can correlate the error with the matching report entry
+  // and the search results returned by findStrings (which omits errored repos).
+  const repoErrors = new Map<string, string>();
 
   const findOpts: FindStringsOptions = {
     searchStrings: strings,
@@ -314,15 +553,81 @@ export async function runFindStrings(
     pathFilter: resolved.pathFilter,
     includeTests: resolved.includeTests,
     concurrency: resolved.concurrency,
-    onProgress: (done, total, currentRepo) => {
+    onProgress: (done, total, currentRepo, error) => {
+      if (error !== undefined) {
+        repoErrors.set(currentRepo, error);
+      }
       report(`[${done}/${total}] ${currentRepo}`);
     },
   };
 
   const results: MatchResult[] = await findStrings(findOpts);
 
-  const json = JSON.stringify(results, null, 2);
-  const outputPath = resolved.output;
+  // The set of repos actually scanned = selectedRepos in interactive mode, or
+  // the full filtered list headless. Every scanned repo gets a report entry.
+  const scanned = selectedRepos ?? repos;
+  const resultByRepo = new Map<string, MatchResult>();
+  for (const r of results) {
+    resultByRepo.set(r.projectName, r);
+  }
+  const repoInfoByName = new Map<string, { id: number; webUrl: string | null }>();
+  for (const p of filtered) {
+    if (p.name && p.web_url !== null) {
+      repoInfoByName.set(p.name, { id: p.id, webUrl: p.web_url ?? null });
+    }
+  }
+
+  // Order matters for a stable, human-friendly report: entries that came back
+  // in `results` first, then any scanned repo that had zero matches or an
+  // error (so the report still shows it was searched).
+  const repositories: ReportRepository[] = [];
+  const seen = new Set<string>();
+  for (const r of results) {
+    if (seen.has(r.projectName)) {
+      continue;
+    }
+    seen.add(r.projectName);
+    const error = repoErrors.get(r.projectName) ?? null;
+    repositories.push({
+      projectId: r.projectId,
+      projectName: r.projectName,
+      projectDescription: r.projectDescription,
+      webUrl: repoInfoByName.get(r.projectName)?.webUrl ?? null,
+      branchExists: error === null || !isBranchMissingError(error),
+      error,
+      resultsLength: r.resultsLength,
+      results: r.results,
+    });
+  }
+  for (const repo of scanned) {
+    if (seen.has(repo.name)) {
+      continue;
+    }
+    seen.add(repo.name);
+    const error = repoErrors.get(repo.name) ?? null;
+    repositories.push({
+      projectId: repo.id,
+      projectName: repo.name,
+      projectDescription: null,
+      webUrl: repoInfoByName.get(repo.name)?.webUrl ?? null,
+      branchExists: error === null || !isBranchMissingError(error),
+      error,
+      resultsLength: 0,
+      results: [],
+    });
+  }
+
+  const report2 = buildReport(resolved, strings, repositories);
+
+  const payload =
+    resolved.format === 'txt'
+      ? renderReportTxt(report2)
+      : JSON.stringify(report2, null, 2);
+
+  // Resolve the target file: explicit --output, else auto name with
+  // versioning. When --stdout is set we also emit to stdout.
+  const outputPath = resolveOutputPath(resolved.output, resolved.format, formatDate());
+  let wroteFile = false;
 
   if (outputPath) {
     // Ensure the parent directory exists, recursively. `--output ./a/b/c.json`
@@ -332,13 +637,32 @@ export async function runFindStrings(
     // it's safe to call unconditionally. `dirname('foo.json')` returns '.',
     // and `mkdir('.', { recursive: true })` is also a no-op.
     await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, json, 'utf-8');
-    report(`Wrote ${results.length} result(s) to ${outputPath}`);
-  } else {
-    process.stdout.write(`${json}\n`);
+    await writeFile(outputPath, payload, 'utf-8');
+    wroteFile = true;
+    report(
+      `Wrote ${repositories.length} repo(s) to ${outputPath}`,
+    );
   }
 
-  return { results, outputPath };
+  if (resolved.stdout) {
+    process.stdout.write(`${payload}\n`);
+  }
+
+  return { report: report2, outputPath: wroteFile ? outputPath : undefined };
+}
+
+/**
+ * Local date-time label used in auto-generated report filenames, e.g.
+ * `2026-08-13-1536`. Format is not contractual — it only needs to be unique
+ * enough per run and readable as a timestamp.
+ */
+function formatDate(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `-${pad(d.getHours())}${pad(d.getMinutes())}`
+  );
 }
 
 /**
@@ -399,7 +723,17 @@ export function buildProgram(): Command {
       '--enable-logs',
       'Enable debug/API logging (also enabled automatically with --interactive)',
     )
-    .option('-o, --output <path>', 'Path to write JSON results; omit to write to stdout')
+    .addOption(
+      new Option(
+        '--format <txt|json>',
+        'Report format. Default: json (also drives the extension of the auto-generated file name).',
+      ).choices(['txt', 'json']),
+    )
+    .option(
+      '--stdout',
+      'Also write the report to stdout (in addition to the file)',
+    )
+    .option('-o, --output <path>', 'Path to write the report; omit to use an auto-generated file name')
     .option(
       '-c, --concurrency <n>',
       'Maximum number of parallel archive-fetch + zip-parse tasks',

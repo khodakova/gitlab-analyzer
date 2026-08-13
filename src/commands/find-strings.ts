@@ -76,8 +76,17 @@ export type FindStringsOptions = {
    * @param done - Projects processed so far (1-based).
    * @param total - Total projects to process (after `excludeRepos` filter).
    * @param currentRepo - Name of the project that just finished.
+   * @param error - Present when the project's archive could not be fetched
+   *   (null/`undefined` on success). Carries the underlying error message so
+   *   callers can record why a repo failed (e.g. missing branch, private,
+   *   archived, removed mid-scan).
    */
-  onProgress?: (done: number, total: number, currentRepo: string) => void;
+  onProgress?: (
+    done: number,
+    total: number,
+    currentRepo: string,
+    error?: string,
+  ) => void;
 
   /**
    * Optional pre-loaded project list. When provided, `findStrings` does NOT
@@ -261,14 +270,26 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
   const limit = pLimit(opts.concurrency ?? 5);
 
   const tasks = projects.map((project) => limit(async (): Promise<MatchResult | null> => {
-    const archive = await getProjectArchive(project.id, {
-      projectName: project.name,
-      branch,
-    });
+    let archive: Blob | ArrayBuffer | null;
+    let errorMsg: string | undefined;
+    try {
+      archive = await getProjectArchive(project.id, {
+        projectName: project.name,
+        branch,
+      });
+      if (archive === null) {
+        // Compatibility path: callers that still return `null` (instead of
+        // throwing) to signal an unreachable archive.
+        errorMsg = `Не удалось получить архив по проекту ${project.name} ${project.id}`;
+      }
+    } catch (err) {
+      archive = null;
+      errorMsg = err instanceof Error ? err.message : String(err);
+    }
 
-    if (archive === null) {
+    if (errorMsg !== undefined) {
       done++;
-      opts.onProgress?.(done, total, project.name);
+      opts.onProgress?.(done, total, project.name, errorMsg);
       return null;
     }
 

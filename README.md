@@ -16,8 +16,11 @@
 - **Parallel by default** — controlled concurrency via
   [`p-limit`](https://github.com/sindresorhus/p-limit), default 5 parallel
   archive fetches.
-- **Pipeable JSON output** — results go to a file (`--output`) or stdout, with
-  progress on stderr so the JSON stays clean for downstream tools.
+- **Self-describing report output** — results are written as a JSON object
+  (or human-readable `txt`) with `metadata` (when, which branch, which repos,
+  which strings, filters) plus a per-repo breakdown that includes any fetch
+  errors. Output goes to a file (auto-named or `--output`) and optionally to
+  stdout (`--stdout`).
 
 ## Installation
 
@@ -204,7 +207,11 @@ Options:
   -b, --branch <name>      Branch to scan in every project
   -p, --path-filter <str>  Substring filter for file paths inside the archive
       --include-tests      Include *.test.* files in the search
-  -o, --output <path>      Path to write JSON results; omit to write to stdout
+      --format <txt|json>  Report format (default: json; drives the extension of
+                           the auto-generated file name)
+      --stdout             Also write the report to stdout (in addition to the file)
+  -o, --output <path>      Path to write the report; omit to use an auto-generated
+                           file name
   -c, --concurrency <n>    Maximum number of parallel archive-fetch + zip-parse tasks
       --interactive        Let you choose which repositories to search
                            (space toggles a repo, Enter confirms); empty
@@ -296,13 +303,24 @@ node dist/cli.js find-strings 'string1', 'string2' `
 ### Output routing
 
 - **`--output <path>`** (or `commands.find-strings.output` in the config)
-  writes the JSON result to the given file.
-- **No `--output` flag and no config default** — JSON is written to **stdout**.
+  writes the report to the given file.
+- **No `--output` flag and no config default** — an auto-named file is
+  created in the current directory: `find-strings-results-<DATE>.<ext>`,
+  where `<ext>` is `.json` (default) or `.txt` (with `--format txt`). If a
+  file with that name already exists, a numeric version is appended before
+  the extension (`-1`, `-2`, …) until a free name is found.
+- **`--stdout`** — additionally write the report to **stdout** (useful for
+  piping; with `--output` the report goes both to the file and to stdout).
+- **`--format <txt|json>`** — chooses the report format (default `json`).
+  If `--format` conflicts with the extension of an explicit `--output` path
+  (e.g. `--format txt -o result.json`), the command fails with an error and
+  nothing is written.
 - **Progress** (e.g. `[3/12] my-frontend-app`) and **error / summary lines**
-  always go to **stderr**, so the stdout JSON stays clean for piping:
+  always go to **stderr**, so the report on stdout stays clean for piping:
 
   ```bash
-  gitlab-analyzer find-strings 'TODO' | jq '.[].projectName'
+  gitlab-analyzer find-strings 'TODO' --stdout | jq '.metadata.branch'
+  gitlab-analyzer find-strings 'TODO' --stdout | jq '.repositories[].projectName'
   ```
 
 ### Exit codes
@@ -381,9 +399,12 @@ the picker). `excludeRepos` / `selectedRepos` are still applied on top.
 
 ## Output Schema
 
-`findStrings` returns an array of `MatchResult`, one entry per project whose
-archive was fetched successfully. Projects whose archive fetch fails are
-silently omitted.
+### Library API (`findStrings`)
+
+`findStrings` still returns an array of `MatchResult`, one entry per project
+whose archive was fetched successfully. Projects whose archive fetch fails are
+omitted (their error is reported through the 4th `onProgress` argument —
+`(done, total, currentRepo, error?)`). The library return shape is unchanged.
 
 ```ts
 type MatchResult = {
@@ -399,29 +420,53 @@ type MatchResult = {
 };
 ```
 
-A minimal example:
+### CLI report file / stdout
+
+The CLI writes a **self-describing report object** instead of a bare array.
+It has a `metadata` block plus a `repositories` array — one entry per repo
+that was actually scanned (including zero-match repos and repos whose archive
+could not be fetched; those carry `error` and, when it looks like the branch
+is missing, `branchExists: false`).
 
 ```json
-[
-  {
-    "projectId": 42,
-    "projectName": "frontend-app",
-    "projectDescription": "Customer-facing web app",
-    "resultsLength": 1,
-    "results": [
-      {
-        "filename": "src/components/Foo.ts",
-        "matches": ["console.log"],
-        "content": [
-          "import { useState } from 'react';",
-          "console.log('render');",
-          "export const Foo = () => null;"
-        ]
-      }
-    ]
-  }
-]
+{
+  "metadata": {
+    "generatedAt": "2026-08-13T15:36:00.000Z",
+    "branch": "develop",
+    "searchStrings": ["console.log", "debugger"],
+    "repoNameFilter": null,
+    "pathFilter": "/src/",
+    "includeTests": false,
+    "excludeRepos": ["archived-repo"]
+  },
+  "repositories": [
+    {
+      "projectId": 42,
+      "projectName": "frontend-app",
+      "projectDescription": "Customer-facing web app",
+      "webUrl": "https://gitlab.example.com/frontend-app",
+      "branchExists": true,
+      "error": null,
+      "resultsLength": 1,
+      "results": [
+        {
+          "filename": "src/components/Foo.ts",
+          "matches": ["console.log"],
+          "content": [
+            "import { useState } from 'react';",
+            "console.log('render');",
+            "export const Foo = () => null;"
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
+
+`--format txt` renders the same data as human-readable text (metadata lines
+first, then per-repo file blocks with full `content`).
+
 
 ## Troubleshooting
 
@@ -456,8 +501,10 @@ token has `read_api` scope on your GitLab instance.
 ### "404 Not Found" / "403 Forbidden" on a specific project
 
 That project is unreachable with the current token — typically archived,
-private without the right access, or removed mid-scan. The tool silently
-skips it; the remaining projects still produce results.
+private without the right access, or removed mid-scan. The repo is skipped
+from search results, but the report still lists it in `repositories` with the
+error captured in `error` (and `branchExists: false` when the branch looks
+missing). The remaining projects still produce results.
 
 ### Rate limiting / timeouts on large instances
 

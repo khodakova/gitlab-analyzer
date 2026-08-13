@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
   repoSelect: vi.fn(),
   getAllProjects: vi.fn(),
+  existsSync: vi.fn(),
 }));
 
 vi.mock('../../config/load.ts', () => ({
@@ -27,6 +28,10 @@ vi.mock('node:fs/promises', () => ({
   mkdir: mocks.mkdir,
 }));
 
+vi.mock('node:fs', () => ({
+  existsSync: mocks.existsSync,
+}));
+
 vi.mock('../../utils/repo-select.ts', () => ({
   repoSelect: mocks.repoSelect,
   enquirerRepoSelect: vi.fn(),
@@ -36,7 +41,16 @@ vi.mock('../../utils/get-projects.ts', () => ({
   getAllProjects: mocks.getAllProjects,
 }));
 
-import { buildProgram, runCli, runFindStrings, resolveOptions } from '../../cli.ts';
+import {
+  buildProgram,
+  runCli,
+  runFindStrings,
+  resolveOptions,
+  resolveOutputPath,
+  assertFormatPathConsistency,
+  renderReportTxt,
+  type Report,
+} from '../../cli.ts';
 import * as loggerModule from '../../utils/logger.ts';
 
 /**
@@ -100,6 +114,8 @@ describe('cli > buildProgram', () => {
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
     mocks.getAllProjects.mockReset();
+    mocks.existsSync.mockReset();
+    mocks.existsSync.mockReturnValue(false);
     // runFindStrings now fetches the project list to build the repo report /
     // picker. Default to an empty list; interactive & headless-list tests
     // override this with their own fixtures.
@@ -245,6 +261,9 @@ describe('cli > buildProgram', () => {
       expect(encoding).toBe('utf-8');
       expect(String(payload)).toContain('"projectName": "mocked-repo"');
       expect(String(payload)).toContain('"projectId": 42');
+      // The report is the new object shape: metadata + repositories.
+      expect(String(payload)).toContain('"metadata"');
+      expect(String(payload)).toContain('"repositories"');
     });
 
     it('reports progress to stderr via onProgress callback', async () => {
@@ -317,10 +336,10 @@ describe('cli > buildProgram', () => {
       ]);
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain(`Wrote 2 result(s) to ${tmpFile}`);
+      expect(stderrText).toContain(`Wrote 2 repo(s) to ${tmpFile}`);
     });
 
-    it('writes JSON to stdout when --output is omitted', async () => {
+    it('writes the report to stdout when --stdout is passed', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
       mocks.findStrings.mockResolvedValue([
         {
@@ -339,11 +358,15 @@ describe('cli > buildProgram', () => {
         'gitlab-analyzer',
         'find-strings',
         'needle',
+        '--stdout',
       ]);
 
-      expect(mocks.writeFile).not.toHaveBeenCalled();
+      // With --stdout and no --output, an auto-named file is still written,
+      // and the report is ALSO emitted to stdout.
+      expect(mocks.writeFile).toHaveBeenCalledTimes(1);
       const stdoutText = collectWriteCalls(stdoutSpy);
       expect(stdoutText).toContain('"projectName": "stdout-repo"');
+      expect(stdoutText).toContain('"metadata"');
     });
 
     it('parses comma-separated --exclude values into an array', async () => {
@@ -603,6 +626,8 @@ describe('cli > runFindStrings (exported helper)', () => {
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
     mocks.getAllProjects.mockReset();
+    mocks.existsSync.mockReset();
+    mocks.existsSync.mockReturnValue(false);
     // runFindStrings now fetches the project list to build the repo report /
     // picker. Default to an empty list; interactive & headless-list tests
     // override this with their own fixtures.
@@ -637,8 +662,15 @@ describe('cli > runFindStrings (exported helper)', () => {
       concurrency: 3, // CLI override
     });
 
-    expect(result.results).toEqual([]);
-    expect(result.outputPath).toBeUndefined();
+    expect(result.report.repositories).toEqual([]);
+    // No --output → an auto-named file is generated (not stdout).
+    expect(result.outputPath).toMatch(/^find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+    expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+    const [autoPath, payload] = mocks.writeFile.mock.calls[0];
+    expect(autoPath).toBe(result.outputPath);
+    // The report payload is the new JSON object shape with metadata.
+    expect(String(payload)).toContain('"metadata"');
+    expect(String(payload)).toContain('"repositories"');
 
     expect(mocks.findStrings).toHaveBeenCalledTimes(1);
     expect(mocks.findStrings).toHaveBeenCalledWith(
@@ -743,15 +775,17 @@ describe('cli > runFindStrings (exported helper)', () => {
     expect(result.outputPath).toBe(outputPath);
   });
 
-  it('does not call mkdir when --output is omitted (stdout path)', async () => {
+  it('writes an auto-named file when --output is omitted', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
     mocks.findStrings.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
 
     const result = await runFindStrings(['x'], {});
 
-    expect(mocks.mkdir).not.toHaveBeenCalled();
-    expect(mocks.writeFile).not.toHaveBeenCalled();
-    expect(result.outputPath).toBeUndefined();
+    // mkdir is still called for the auto-named file in the current dir ('./…').
+    expect(mocks.mkdir).toHaveBeenCalledTimes(1);
+    expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+    expect(result.outputPath).toMatch(/^find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
   });
 
     it('prints the resolved repo list to stderr in headless mode', async () => {
@@ -771,7 +805,7 @@ describe('cli > runFindStrings (exported helper)', () => {
       expect(stderrText).toContain('alpha');
       expect(stderrText).toContain('beta');
       expect(stderrText).toContain('skip');
-      expect(result.outputPath).toBeUndefined();
+      expect(result.outputPath).toMatch(/find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json/);
     });
 
     it('passes the pre-filtered project list to findStrings (no duplicate fetch)', async () => {
@@ -1105,6 +1139,245 @@ describe('cli > resolveOptions (precedence: CLI > env > config > default)', () =
       const result = resolveOptions(['needle'], {}, emptyConfig() as never);
 
       expect(result.ok).toBe(true);
+    });
+  });
+});
+
+describe('cli > report helpers', () => {
+  beforeEach(() => {
+    mocks.loadConfig.mockReset();
+    mocks.findStrings.mockReset();
+    mocks.writeFile.mockReset();
+    mocks.mkdir.mockReset();
+    mocks.repoSelect.mockReset();
+    mocks.getAllProjects.mockReset();
+    mocks.existsSync.mockReset();
+    mocks.existsSync.mockReturnValue(false);
+    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+    mocks.mkdir.mockResolvedValue(undefined);
+  });
+
+  describe('resolveOutputPath', () => {
+    it('returns the explicit output path verbatim', () => {
+      expect(resolveOutputPath('/tmp/x.json', 'json', '2026-08-13-1536')).toBe(
+        '/tmp/x.json',
+      );
+    });
+
+    it('generates an auto json name when no --output is given', () => {
+      mocks.existsSync.mockReturnValue(false);
+      expect(resolveOutputPath(undefined, 'json', '2026-08-13-1536')).toBe(
+        'find-strings-results-2026-08-13-1536.json',
+      );
+    });
+
+    it('generates an auto txt name for --format txt', () => {
+      mocks.existsSync.mockReturnValue(false);
+      expect(resolveOutputPath(undefined, 'txt', '2026-08-13-1536')).toBe(
+        'find-strings-results-2026-08-13-1536.txt',
+      );
+    });
+
+    it('versions the auto name with -1, -2 when the base name exists', () => {
+      const base = 'find-strings-results-2026-08-13-1536.json';
+      const v1 = 'find-strings-results-2026-08-13-1536-1.json';
+      const v2 = 'find-strings-results-2026-08-13-1536-2.json';
+      mocks.existsSync
+        .mockImplementation((p: string) => p === base || p === v1);
+      expect(resolveOutputPath(undefined, 'json', '2026-08-13-1536')).toBe(v2);
+    });
+  });
+
+  describe('assertFormatPathConsistency', () => {
+    it('passes when --output extension matches --format json', () => {
+      expect(() =>
+        assertFormatPathConsistency('/tmp/r.json', 'json'),
+      ).not.toThrow();
+    });
+
+    it('passes when --output extension matches --format txt', () => {
+      expect(() =>
+        assertFormatPathConsistency('/tmp/r.txt', 'txt'),
+      ).not.toThrow();
+    });
+
+    it('throws when --format txt conflicts with a .json --output', () => {
+      expect(() =>
+        assertFormatPathConsistency('/tmp/r.json', 'txt'),
+      ).toThrow(/conflicts with output path/);
+    });
+
+    it('throws when --format json conflicts with a .txt --output', () => {
+      expect(() =>
+        assertFormatPathConsistency('/tmp/r.txt', 'json'),
+      ).toThrow(/conflicts with output path/);
+    });
+
+    it('does not throw when the output has no extension', () => {
+      expect(() =>
+        assertFormatPathConsistency('/tmp/r', 'txt'),
+      ).not.toThrow();
+    });
+  });
+
+  describe('renderReportTxt', () => {
+    const report: Report = {
+      metadata: {
+        generatedAt: '2026-08-13T00:00:00.000Z',
+        branch: 'develop',
+        searchStrings: ['needle'],
+        repoNameFilter: null,
+        pathFilter: '/src/',
+        includeTests: false,
+        excludeRepos: ['skip-me'],
+      },
+      repositories: [
+        {
+          projectId: 1,
+          projectName: 'alpha',
+          projectDescription: null,
+          webUrl: 'https://gitlab/alpha',
+          branchExists: true,
+          error: null,
+          resultsLength: 1,
+          results: [
+            {
+              filename: '/src/a.ts',
+              matches: ['needle'],
+              content: ['line1', 'needle'],
+            },
+          ],
+        },
+      ],
+    };
+
+    it('includes metadata lines and per-repo file blocks', () => {
+      const txt = renderReportTxt(report);
+      expect(txt).toContain('Generated at: 2026-08-13T00:00:00.000Z');
+      expect(txt).toContain('Branch: develop');
+      expect(txt).toContain('Excluded repos: skip-me');
+      expect(txt).toContain('---- alpha (id: 1) ----');
+      expect(txt).toContain('> /src/a.ts');
+      expect(txt).toContain('matched: needle');
+    });
+  });
+
+  describe('report metadata & repo errors (runFindStrings)', () => {
+    it('captures metadata, repositories and a per-repo error / branchExists=false', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'good', description: 'G' },
+        { id: 2, name: 'badbranch', description: null },
+      ]);
+      mocks.findStrings.mockImplementation(async (opts) => {
+        // good succeeds; badbranch errors (e.g. missing branch).
+        opts.onProgress?.(1, 2, 'good');
+        opts.onProgress?.(
+          2,
+          2,
+          'badbranch',
+          'Request failed with status code 404',
+        );
+        return [
+          {
+            projectId: 1,
+            projectName: 'good',
+            projectDescription: 'G',
+            resultsLength: 1,
+            results: [
+              {
+                filename: '/src/a.ts',
+                matches: ['needle'],
+                content: ['needle'],
+              },
+            ],
+          },
+        ];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindStrings(['needle'], {
+        format: 'json',
+      });
+
+      // Metadata fields are present.
+      expect(result.report.metadata.searchStrings).toEqual(['needle']);
+      expect(result.report.metadata.branch).toBe('develop');
+      expect(result.report.metadata.generatedAt).toBeTruthy();
+
+      // Both scanned repos appear in repositories.
+      const names = result.report.repositories.map((r) => r.projectName).sort();
+      expect(names).toEqual(['badbranch', 'good']);
+
+      // The errored repo carries its error and branchExists=false.
+      const bad = result.report.repositories.find((r) => r.projectName === 'badbranch');
+      expect(bad?.error).toContain('404');
+      expect(bad?.branchExists).toBe(false);
+      expect(bad?.results).toEqual([]);
+
+      // The good repo carries its results.
+      const good = result.report.repositories.find((r) => r.projectName === 'good');
+      expect(good?.resultsLength).toBe(1);
+      expect(good?.branchExists).toBe(true);
+      expect(good?.error).toBeNull();
+    });
+  });
+
+  describe('resolveOptions > format & stdout', () => {
+    it('defaults format to json and stdout to false', () => {
+      const res = resolveOptions(['x'], {}, defaultConfig() as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.resolved.format).toBe('json');
+        expect(res.resolved.stdout).toBe(false);
+      }
+    });
+
+    it('honors --format and --stdout from CLI', () => {
+      const res = resolveOptions(
+        ['x'],
+        { format: 'txt', stdout: true },
+        defaultConfig() as never,
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.resolved.format).toBe('txt');
+        expect(res.resolved.stdout).toBe(true);
+      }
+    });
+  });
+
+  describe('runFindStrings > --format txt writes a .txt file', () => {
+    it('writes txt payload to the auto-named .txt file', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([
+        {
+          projectId: 1,
+          projectName: 'alpha',
+          projectDescription: null,
+          resultsLength: 1,
+          results: [
+            {
+              filename: '/src/a.ts',
+              matches: ['needle'],
+              content: ['needle'],
+            },
+          ],
+        },
+      ]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindStrings(['needle'], { format: 'txt' });
+
+      expect(result.outputPath).toMatch(/\.txt$/);
+      expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+      const [path, payload] = mocks.writeFile.mock.calls[0];
+      expect(String(path)).toMatch(/\.txt$/);
+      // txt output is human-readable text, not JSON.
+      expect(String(payload)).not.toContain('"metadata"');
+      expect(String(payload)).toContain('Generated at:');
+      expect(String(payload)).toContain('---- alpha (id: 1) ----');
     });
   });
 });

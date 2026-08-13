@@ -643,4 +643,35 @@ describe('findStrings', () => {
       expect(results.map((r) => r.projectName)).toEqual(['keep']);
     });
   });
+
+  describe('case 11: onProgress receives a 4th error argument on failure', () => {
+    it('passes the thrown message for a repo whose archive fetch rejects', async () => {
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'good' }),
+        project({ id: 2, name: 'bad' }),
+      ]);
+      getProjectArchiveMock.mockImplementation(async (id: number) => {
+        if (id === 2) throw new Error('Request failed with status code 404');
+        return await makeZip({ '/src/x.ts': 'X' });
+      });
+
+      const calls: Array<[number, number, string, string | undefined]> = [];
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        onProgress: (done, total, repo, error) => {
+          calls.push([done, total, repo, error]);
+        },
+      });
+
+      // Both repos fire onProgress; the errored one carries the 4th arg.
+      expect(calls).toHaveLength(2);
+      const badCall = calls.find(([, , repo]) => repo === 'bad');
+      expect(badCall?.[3]).toContain('404');
+      const goodCall = calls.find(([, , repo]) => repo === 'good');
+      expect(goodCall?.[3]).toBeUndefined();
+      // The errored repo is omitted from results.
+      expect(results.map((r) => r.projectName)).toEqual(['good']);
+    });
+  });
 });
