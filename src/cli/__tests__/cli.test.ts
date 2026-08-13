@@ -295,9 +295,50 @@ describe('cli > buildProgram', () => {
       ]);
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain('[1/3] first');
-      expect(stderrText).toContain('[2/3] second');
-      expect(stderrText).toContain('[3/3] third');
+      expect(stderrText).toContain('Обработано 1 из 3');
+      expect(stderrText).toContain('Обработано 2 из 3');
+      expect(stderrText).toContain('Обработано 3 из 3');
+    });
+
+    it('shows the last started repo name after the counter via onRepoStart', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+        { id: 2, name: 'beta', description: null },
+      ]);
+
+      mocks.findStrings.mockImplementation(async (opts) => {
+        opts.onRepoStart?.('alpha');
+        opts.onProgress?.(1, 2, 'alpha');
+        opts.onRepoStart?.('beta');
+        opts.onProgress?.(2, 2, 'beta');
+        return [];
+      });
+
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const tmpFile = path.join(
+        os.tmpdir(),
+        `gitlab-analyzer-progress-start-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+      );
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-strings',
+        'needle',
+        '--output',
+        tmpFile,
+      ]);
+
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('Обработано 0 из 2 · alpha');
+      expect(stderrText).toContain('Обработано 1 из 2 · alpha');
+      expect(stderrText).toContain('Обработано 1 из 2 · beta');
+      expect(stderrText).toContain('Обработано 2 из 2 · beta');
     });
 
     it('emits a summary line to stderr after a successful file write', async () => {

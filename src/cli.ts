@@ -45,30 +45,23 @@ function report(line: string): void {
 /**
  * Compose the live progress frame shown on the single dynamic stderr line.
  *
- * - When no repo is active (e.g. a sequential finish, or the last repo just
- *   finished) the frame is `[done/total] <last>`, matching the historical
- *   `[3/12] my-frontend-app` format.
- * - When one or more repos are actively being processed in parallel, the frame
- *   lists them, because `onProgress` only fires on completion and cannot, on
- *   its own, reveal what is currently running.
+ * The frame is `Обработано N из M` (N = repos finished, M = total), and when a
+ * repo has been started it is followed by ` · <name>` of the most recently
+ * *started* repo — the `onRepoStart` hook reveals which repo is being worked on
+ * right now, whereas `onProgress` only fires on completion.
  *
  * @param done - Repos processed so far (1-based, from `onProgress`).
  * @param total - Total repos to process.
- * @param active - Repos currently being processed.
- * @param last - The repo that most recently finished (only meaningful when
- *   `active` is empty, e.g. a completed job in a sequential-style callback).
+ * @param lastStarted - The repo most recently started (from `onRepoStart`);
+ *   omitted while nothing has been started yet.
  */
 function renderProgressFrame(
   done: number,
   total: number,
-  active: ReadonlySet<string>,
-  last?: string,
+  lastStarted?: string,
 ): string {
-  const prefix = `[${done}/${total}]`;
-  if (active.size > 0) {
-    return `${prefix} · ${Array.from(active).join(', ')}`;
-  }
-  return last !== undefined ? `${prefix} ${last}` : prefix;
+  const prefix = `Обработано ${done} из ${total}`;
+  return lastStarted !== undefined ? `${prefix} · ${lastStarted}` : prefix;
 }
 
 /**
@@ -584,28 +577,24 @@ export async function runFindStrings(
   // and the search results returned by findStrings (which omits errored repos).
   const repoErrors = new Map<string, string>();
 
-  // Set of repos currently being processed, fed by the new `onRepoStart` hook.
-  // Because analysis is parallel (`concurrency`, default 5), more than one repo
-  // can be active at once; the live progress line lists them all so it honestly
-  // reflects what is running rather than just the last one to finish.
-  const activeRepos = new Set<string>();
+  // Most recently *started* repo, fed by the `onRepoStart` hook. Analysis is
+  // parallel (`concurrency`, default 5), so several repos start/finish out of
+  // order; the live line shows the last one that began (not the last one that
+  // finished) so it reflects what is underway right now.
+  let lastStartedRepo: string | undefined;
 
   // Shared counters so `onRepoStart` / the spinner (which fire before/without a
-  // given repo incrementing `done`) can render `[done/total]` using the latest
-  // values reported by `onProgress` (whose `done`/`total` live inside its
+  // given repo incrementing `done`) can render `Обработано N из M` using the
+  // latest values reported by `onProgress` (whose `done`/`total` live inside its
   // closure). Initialised to the repo count this run processes — mirrors
   // findStrings' `total`, computed from the resolved/selected repo set.
   const doneRef = { current: 0 };
   const totalRef = { current: selectedRepos?.length ?? repos.length };
 
-  // Most recently finished repo — used to render `[done/total] <last>` when no
-  // repo is active (sequential-style progress, or between parallel finishes).
-  let lastDoneRepo: string | undefined;
-
   // Single source of truth for the live frame, shared by the callbacks and the
   // spinner timer so they always draw a consistent line.
   const currentFrame = (): string =>
-    renderProgressFrame(doneRef.current, totalRef.current, activeRepos, lastDoneRepo);
+    renderProgressFrame(doneRef.current, totalRef.current, lastStartedRepo);
 
   // Animate the loader: while work is running, periodically redraw the current
   // frame with the *same* label so `ProgressRenderer.spin` advances the glyph.
@@ -624,21 +613,19 @@ export async function runFindStrings(
     includeTests: resolved.includeTests,
     concurrency: resolved.concurrency,
     onRepoStart: (repo) => {
-      activeRepos.add(repo);
+      lastStartedRepo = repo;
       progress.spin(currentFrame());
     },
     onProgress: (done, total, currentRepo, error) => {
-      activeRepos.delete(currentRepo);
       if (error !== undefined) {
         repoErrors.set(currentRepo, error);
       }
       doneRef.current = done;
       totalRef.current = total;
-      lastDoneRepo = currentRepo;
       if (done >= total) {
         // Last repo done — stop the spinner and pin the final frame as a
-        // permanent line so the log ends with a clean `[N/N] ...` before the
-        // summary.
+        // permanent line so the log ends with a clean `Обработано M из M ...`
+        // before the summary.
         clearInterval(spinnerTimer);
         progress.finish(currentFrame());
       } else {

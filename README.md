@@ -61,7 +61,7 @@ the CLI prints one consolidated error listing every missing field.
      --output ./results.json
    ```
 
-   Progress (`[3/12] my-frontend-app`) goes to **stderr**; the JSON array of
+   Progress (`Обработано 3 из 12 · my-frontend-app`) goes to **stderr**; the JSON array of
    matches goes to `./results.json`.
 
 > A `gitlab-analyzer.json` config file is **optional**. Use it when you want
@@ -241,7 +241,7 @@ to stderr before searching so you can see where the search will run.
 ### Logging
 
 By default the tool is quiet (`--enable-logs` is **off**): progress
-(`[3/12] repo`), the summary line, and the pre-search repo list are always
+(`Обработано 3 из 12 · repo`), the summary line, and the pre-search repo list are always
 printed to **stderr**, but debug/API output is suppressed.
 
 Pass `--enable-logs` to turn on the full debug log: API request URLs,
@@ -315,7 +315,7 @@ node dist/cli.js find-strings 'string1', 'string2' `
   If `--format` conflicts with the extension of an explicit `--output` path
   (e.g. `--format txt -o result.json`), the command fails with an error and
   nothing is written.
-- **Progress** (e.g. `[3/12] my-frontend-app`) and **error / summary lines**
+- **Progress** (e.g. `Обработано 3 из 12 · my-frontend-app`) and **error / summary lines**
   always go to **stderr**, so the report on stdout stays clean for piping:
 
   ```bash
