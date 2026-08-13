@@ -18,7 +18,7 @@ import { getAllProjects } from './utils/get-projects.ts';
 import { repoSelect } from './utils/repo-select.ts';
 import { configureLogger, logger } from './utils/logger.ts';
 import { ProgressRenderer } from './utils/progress.ts';
-import type { RepoInfo } from './types.ts';
+import type { RepoInfo, SearchProjectsItem } from './types.ts';
 
 /**
  * Single shared renderer for all CLI status output that goes to stderr and is
@@ -542,7 +542,25 @@ export async function runFindStrings(
   // `projects` so it does not re-fetch the project list (avoiding a duplicate
   // API call and a duplicated "Найдено репозиториев" debug line). Kept pure:
   // findStrings still does its own exclude/selected filtering on top.
-  const allProjects = await getAllProjects(resolved.repoNameFilter);
+  //
+  // Fetching the repo list can take a while — `getAllProjects` walks every
+  // page of the GitLab projects API before any per-repo work begins, and
+  // previously nothing was drawn during that phase, so the console looked
+  // frozen. Show an indeterminate loader here so it's clear a request is in
+  // flight; it is torn down as soon as the list is available (before the
+  // interactive picker / headless list print), at which point the per-repo
+  // `Обработано N из M` spinner takes over.
+  const fetchReposTimer = setInterval(() => {
+    progress.spin('Получение списка репозиториев…');
+  }, 150);
+
+  let allProjects: SearchProjectsItem[];
+  try {
+    allProjects = await getAllProjects(resolved.repoNameFilter);
+  } finally {
+    clearInterval(fetchReposTimer);
+    progress.clear();
+  }
   const excludeList = resolved.excludeRepos;
   const filtered = allProjects.filter(
     (project) =>

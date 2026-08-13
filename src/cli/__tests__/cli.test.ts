@@ -849,6 +849,44 @@ describe('cli > runFindStrings (exported helper)', () => {
       expect(result.outputPath).toMatch(/find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json/);
     });
 
+    it('shows a loader while the repository list is being fetched', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+      mocks.mkdir.mockResolvedValue(undefined);
+
+      // Keep getAllProjects pending so we can observe the in-flight frame
+      // before the list resolves (mirrors a slow paginated repo-list fetch).
+      let resolveProjects!: (v: unknown) => void;
+      mocks.getAllProjects.mockReturnValue(
+        new Promise((resolve) => {
+          resolveProjects = resolve;
+        }),
+      );
+
+      // Fake timers so we can advance past the 150ms loader interval without
+      // waiting real time.
+      vi.useFakeTimers();
+      try {
+        const runPromise = runFindStrings(['x'], {});
+
+        // Let at least one interval tick fire so the loader frame is drawn.
+        await vi.advanceTimersByTimeAsync(150);
+
+        // While the repo-list request is in flight, the loader is on stderr.
+        const duringFetch = collectWriteCalls(stderrSpy);
+        expect(duringFetch).toContain('Получение списка репозиториев…');
+
+        resolveProjects([]);
+        await runPromise;
+
+        const afterText = collectWriteCalls(stderrSpy);
+        expect(afterText).toContain('Будет выполнен поиск по 0 репозиториям:');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('passes the pre-filtered project list to findStrings (no duplicate fetch)', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
       mocks.getAllProjects.mockResolvedValue([
