@@ -8,17 +8,21 @@ import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   findStrings,
+  loadConfig,
+  configureLogger,
+  logger,
   type FindStringsOptions,
   type MatchResult,
-} from './commands/find-strings.ts';
-import { loadConfig } from './config/load.ts';
-import type { GitlabAnalyzerConfig } from './config/schema.ts';
-import { axiosInstance } from './api/config.ts';
-import { getAllProjects } from './utils/get-projects.ts';
+  type RepoInfo,
+} from '@gitlab-analyzer/core';
+import {
+  axiosInstance,
+  getAllProjects,
+  ProgressRenderer,
+  type GitlabAnalyzerConfig,
+  type SearchProjectsItem,
+} from '@gitlab-analyzer/core/internal';
 import { repoSelect } from './utils/repo-select.ts';
-import { configureLogger, logger } from './utils/logger.ts';
-import { ProgressRenderer } from './utils/progress.ts';
-import type { RepoInfo, SearchProjectsItem } from './types.ts';
 
 /**
  * Single shared renderer for all CLI status output that goes to stderr and is

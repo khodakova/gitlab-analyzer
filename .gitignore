@@ -1,5 +1,7 @@
 node_modules/
+.yarn/
 dist/
+packages/*/dist/
 .env
 .env.local
 *.log

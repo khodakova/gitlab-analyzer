@@ -1,75 +1,18 @@
 {
-  "name": "gitlab-analyzer",
-  "version": "0.0.0",
-  "license": "MIT",
-  "type": "module",
-  "keywords": [],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/khodakova/gitlab-analyzer.git"
-  },
-  "bugs": {
-    "url": "https://github.com/khodakova/gitlab-analyzer/issues"
-  },
-  "homepage": "https://github.com/khodakova/gitlab-analyzer#readme",
-  "author": "khodakova",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "bin": {
-    "gitlab-analyzer": "./dist/cli.js"
-  },
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "files": [
-    "dist/",
-    "README.md",
-    "LICENSE"
+  "private": true,
+  "workspaces": [
+    "packages/*"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "packageManager": "yarn@1.22.19",
   "scripts": {
-    "build": "tsup",
-    "build:types": "tsc --noEmit -p tsconfig.json",
-    "dev": "tsx src/cli.ts",
-    "prepublishOnly": "yarn run build",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "version": "yarn test && yarn build && changeset add && changeset version",
-    "publish-version": "yarn test && yarn build && yarn changeset publish"
-  },
-  "dependencies": {
-    "axios": "1.19.0",
-    "colorette": "2.0.20",
-    "commander": "15.0.0",
-    "cosmiconfig": "10.0.0",
-    "dotenv": "17.4.2",
-    "enquirer": "^2.4.1",
-    "jszip": "3.10.1",
-    "p-limit": "7.3.1",
-    "semver": "7.8.5",
-    "tsx": "4.23.11",
-    "xlsx": "0.18.5",
-    "zod": "4.4.3"
+    "build": "yarn workspaces run build",
+    "typecheck": "yarn workspaces run typecheck",
+    "test": "yarn workspaces run test",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "yarn workspaces run prepublishOnly && changeset publish"
   },
   "devDependencies": {
-    "@changesets/cli": "2.27.7",
     "@changesets/changelog-git": "0.2.0",
-    "@types/node": "20",
-    "@vitest/coverage-v8": "4.1.10",
-    "tsup": "8.5.1",
-    "typescript": "5.7.3",
-    "vitest": "4.1.10"
+    "@changesets/cli": "2.27.7"
   }
 }

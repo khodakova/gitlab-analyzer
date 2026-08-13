@@ -15,13 +15,29 @@ const mocks = vi.hoisted(() => ({
   existsSync: vi.fn(),
 }));
 
-vi.mock('../../config/load.ts', () => ({
-  loadConfig: mocks.loadConfig,
-}));
+// cli.ts imports findStrings + loadConfig from `@gitlab-analyzer/core` (public)
+// and getAllProjects from `@gitlab-analyzer/core/internal`. Mock only the
+// network-facing functions; keep the rest of the real module (logger,
+// configureLogger, axiosInstance, ProgressRenderer) so the progress/logger
+// wiring assertions exercise the real implementations.
+vi.mock('@gitlab-analyzer/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@gitlab-analyzer/core')>();
+  return {
+    ...actual,
+    findStrings: mocks.findStrings,
+    loadConfig: mocks.loadConfig,
+  };
+});
 
-vi.mock('../../commands/find-strings.ts', () => ({
-  findStrings: mocks.findStrings,
-}));
+vi.mock('@gitlab-analyzer/core/internal', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('@gitlab-analyzer/core/internal')
+  >();
+  return {
+    ...actual,
+    getAllProjects: mocks.getAllProjects,
+  };
+});
 
 vi.mock('node:fs/promises', () => ({
   writeFile: mocks.writeFile,
@@ -32,13 +48,9 @@ vi.mock('node:fs', () => ({
   existsSync: mocks.existsSync,
 }));
 
-vi.mock('../../utils/repo-select.ts', () => ({
+vi.mock('../utils/repo-select.ts', () => ({
   repoSelect: mocks.repoSelect,
   enquirerRepoSelect: vi.fn(),
-}));
-
-vi.mock('../../utils/get-projects.ts', () => ({
-  getAllProjects: mocks.getAllProjects,
 }));
 
 import {
@@ -50,8 +62,8 @@ import {
   assertFormatPathConsistency,
   renderReportTxt,
   type Report,
-} from '../../cli.ts';
-import * as loggerModule from '../../utils/logger.ts';
+} from '../cli.ts';
+import * as loggerModule from '@gitlab-analyzer/core';
 
 /**
  * Default env values for tests. Set in the file-level `beforeEach` below so

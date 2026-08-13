@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { repoSelect, type RepoSelectPrompt } from '../repo-select.ts';
-import type { RepoInfo } from '../../types.ts';
+import type { RepoInfo } from '@gitlab-analyzer/core';
 
 describe('repoSelect', () => {
   it('injects the prompt and returns its result untouched', async () => {

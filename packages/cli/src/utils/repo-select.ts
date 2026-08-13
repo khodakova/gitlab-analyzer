@@ -1,5 +1,5 @@
 import Enquirer from 'enquirer';
-import type { RepoInfo } from '../types.ts';
+import type { RepoInfo } from '@gitlab-analyzer/core';
 
 /**
  * Minimal structural type for the `multiselect` question we pass to enquirer.
