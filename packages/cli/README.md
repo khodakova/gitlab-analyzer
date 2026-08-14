@@ -193,6 +193,32 @@ A config is useful for **persistent, non-secret** values (branch, exclusions, co
 | `commands.find-strings.concurrency` | `5` | Parallel requests |
 | `commands.find-strings.output` | — | Report path |
 
+## Logging
+
+Log lines go to **stderr** (stdout stays clean and pipeable) and are divided
+into **levels**, each with its own symbol and color:
+
+| Level | Symbol / color | Visible | Typical use |
+|---|---|---|---|
+| `debug` | `[debug]` gray | only with `--enable-logs` | per-file detail: archive download, unzip steps |
+| `info` | `ℹ` cyan | always | phase boundaries: "Получение списка…", "Начинаю поиск…" |
+| `success` | `✓` green | always | completions: "Готово: repo", "Поиск завершён.", final summary |
+| `warn` | `⚠` yellow | always | recoverable problems: "Архив не получен", "репо раздуто" |
+| `error` | `✗` red | always | fatal CLI errors |
+
+`--enable-logs` (or `--interactive`) still turns on the full `[debug]` trace;
+`info`/`success`/`warn` are shown regardless for a readable default run. Blank
+lines separate the phases (list → search → summary), and the run ends with a
+summary block: `✓ Отсканировано репозиториев: N`, an optional `⚠ Из них с
+ошибкой: K (repos…)` line, and `✓ Отчёт: path`. Durations use a latin `s`
+(`0.3s`). Colors respect `NO_COLOR` and auto-detect a TTY; there is no
+`--no-color` flag (set `NO_COLOR=1` instead).
+
+If no repositories match the filters (`--repo-filter` / `--exclude`), the run
+stops early with `ℹ Репозитории не найдены: фильтр/исключения не дали
+результатов.` and exits `0` — it does not start a meaningless zero-repo
+search or print an empty summary.
+
 ## Exporting results
 
 - **`--output <path>`** — write the report to the given file.

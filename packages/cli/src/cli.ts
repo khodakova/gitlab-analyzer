@@ -3,7 +3,7 @@
 // a normal ES module (no execute-permission assumptions).
 import { Command, Option, CommanderError } from 'commander';
 import { fileURLToPath } from 'node:url';
-import { logger } from '@gitlab-analyzer/core';
+import { logger, flushLogs } from '@gitlab-analyzer/core';
 import { runFindStrings } from './commands/find-strings.ts';
 import type { FindStringsCliOptions } from './utils/options.ts';
 
@@ -92,6 +92,7 @@ export function buildProgram(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error(`Error: ${message}`);
+        await flushLogs();
         process.exit(1);
       }
     });
@@ -140,10 +141,12 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
         return;
       }
       // Any other commander-prefixed code is a CLI usage error.
+      await flushLogs();
       process.exit(2);
     }
     const message = err instanceof Error ? err.message : String(err);
     logger.error(`Fatal: ${message}`);
+    await flushLogs();
     process.exit(1);
   }
 }

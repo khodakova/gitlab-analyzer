@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import JSZip from 'jszip';
 
 /**
@@ -26,6 +26,7 @@ vi.mock('../../api/project-archive.ts', () => ({
 
 import { findStrings } from '../find-strings.ts';
 import type { SearchProjectsItem } from '../../types.ts';
+import { configureLogger, logger, flushLogs } from '../../utils/logger.ts';
 
 /**
  * Build a real in-memory ZIP archive (NOT a JSZip mock). Paths MUST use
@@ -697,6 +698,60 @@ describe('findStrings', () => {
       expect(goodCall?.[3]).toBeUndefined();
       // The errored repo is omitted from results.
       expect(results.map((r) => r.projectName)).toEqual(['good']);
+    });
+  });
+
+  describe('case 12: log levels (success "Готово" / warn "Архив не получен" / debug gate)', () => {
+    let stderrSpy: ReturnType<typeof vi.spyOn>;
+    const collect = () =>
+      stderrSpy.mock.calls.map((c: readonly unknown[]) => String(c[0])).join('');
+
+    beforeEach(() => {
+      stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      configureLogger({ enabled: false });
+    });
+
+    it('logs ✓ Готово (success) for a scanned repo, even when debug is disabled', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-ok' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await flushLogs();
+
+      expect(collect()).toContain('✓ Готово: repo-ok (1 файл(ов) с совпадениями)');
+    });
+
+    it('logs ⚠ Архив не получен (warn) when the archive fetch rejects, even when debug is disabled', async () => {
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-bad' })]);
+      getProjectArchiveMock.mockRejectedValue(new Error('Request failed with status code 404'));
+
+      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await flushLogs();
+
+      expect(collect()).toContain('⚠ Архив не получен: repo-bad (');
+    });
+
+    it('gates debug lines ([debug] «Скачивание архива…») behind enabled', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-dbg' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      // disabled: no [debug] line
+      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await flushLogs();
+      expect(collect()).not.toContain('[debug]');
+
+      // enabled: [debug] «Скачивание архива…» appears
+      stderrSpy.mockClear();
+      configureLogger({ enabled: true });
+      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await flushLogs();
+      expect(collect()).toContain('[debug] Скачивание архива: repo-dbg (id=1, branch=main)…');
     });
   });
 });

@@ -112,7 +112,9 @@ describe('cli > buildProgram', () => {
     mocks.getAllProjects.mockReset();
     mocks.existsSync.mockReset();
     mocks.existsSync.mockReturnValue(false);
-    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.getAllProjects.mockResolvedValue([
+      { id: 1, name: 'alpha', description: null },
+    ]);
   });
 
   afterEach(() => {
@@ -334,17 +336,21 @@ describe('cli > buildProgram', () => {
 
     it('emits a summary line to stderr after a successful file write', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+        { id: 2, name: 'beta', description: null },
+      ]);
       mocks.findStrings.mockResolvedValue([
         {
           projectId: 1,
-          projectName: 'a',
+          projectName: 'alpha',
           projectDescription: null,
           resultsLength: 0,
           results: [],
         },
         {
           projectId: 2,
-          projectName: 'b',
+          projectName: 'beta',
           projectDescription: null,
           resultsLength: 0,
           results: [],
@@ -368,7 +374,8 @@ describe('cli > buildProgram', () => {
       ]);
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain(`Wrote 2 repo(s) to ${tmpFile}`);
+      expect(stderrText).toContain('✓ Отсканировано репозиториев: 2');
+      expect(stderrText).toContain(`✓ Отчёт: ${tmpFile}`);
     });
 
     it('writes the report to stdout when --stdout is passed', async () => {
@@ -495,7 +502,9 @@ describe('cli > runCli', () => {
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
     mocks.getAllProjects.mockReset();
-    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.getAllProjects.mockResolvedValue([
+      { id: 1, name: 'alpha', description: null },
+    ]);
   });
 
   afterEach(() => {
