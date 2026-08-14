@@ -52,6 +52,8 @@ describe('index > public API surface', () => {
       '__reExportSentinel',
       'configureLogger',
       'findStrings',
+      'flushLogs',
+      'formatDuration',
       'loadConfig',
       'logger',
     ]);
@@ -60,6 +62,11 @@ describe('index > public API surface', () => {
   it('re-exports the logger configuration helpers', () => {
     expect(typeof indexModule.configureLogger).toBe('function');
     expect(typeof indexModule.logger?.debug).toBe('function');
+    expect(typeof indexModule.logger?.info).toBe('function');
+    expect(typeof indexModule.logger?.success).toBe('function');
+    expect(typeof indexModule.logger?.warn).toBe('function');
     expect(typeof indexModule.logger?.error).toBe('function');
+    expect(typeof indexModule.flushLogs).toBe('function');
+    expect(typeof indexModule.formatDuration).toBe('function');
   });
 });

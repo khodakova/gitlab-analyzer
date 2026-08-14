@@ -17,4 +17,6 @@ yarn-error.log*
 coverage/
 .nyc_output/
 results
+find-strings-results-*.json
 docs
+docs/superpowers/

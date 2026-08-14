@@ -1,9 +1,12 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { green, yellow } from 'colorette';
 import {
   findStrings,
   loadConfig,
   configureLogger,
+  logger,
+  flushLogs,
   type FindStringsOptions,
   type MatchResult,
   type RepoInfo,
@@ -100,7 +103,9 @@ export async function runFindStrings(
 
   let allProjects: SearchProjectsItem[];
   try {
+    logger.info(`Получение списка репозиториев (repoNameFilter='${resolved.repoNameFilter ?? ''}')…`);
     allProjects = await getAllProjects(resolved.repoNameFilter);
+    logger.info(`Список репозиториев получен: ${allProjects.length}`);
   } finally {
     clearInterval(fetchReposTimer);
     progress.clear();
@@ -123,11 +128,21 @@ export async function runFindStrings(
 
     if (selectedRepos.length === 0) {
       report('Поиск отменён: не выбрано ни одного репозитория.');
+      await flushLogs();
       process.exit(0);
     }
   } else {
+    // Nothing to scan (headless) — stop early instead of starting a
+    // meaningless 0-repo search and an empty summary. Exit 0: not an error,
+    // the filter/exclusions simply matched nothing.
+    if (repos.length === 0) {
+      logger.info('Репозитории не найдены: фильтр/исключения не дали результатов.');
+      await flushLogs();
+      process.exit(0);
+    }
     // Headless info output: show where the search will run (stderr, so stdout
     // report stays clean/pipeable).
+    progress.static(''); // разделитель между фазой получения списка и поиском
     report(`Будет выполнен поиск по ${repos.length} репозиториям:`);
     for (const repo of repos) {
       report(repo.name);
@@ -151,7 +166,8 @@ export async function runFindStrings(
   // closure). Initialised to the repo count this run processes — mirrors
   // findStrings' `total`, computed from the resolved/selected repo set.
   const doneRef = { current: 0 };
-  const totalRef = { current: selectedRepos?.length ?? repos.length };
+  const scannedCount = selectedRepos?.length ?? repos.length;
+  const totalRef = { current: scannedCount };
 
   // Single source of truth for the live frame, shared by the callbacks and the
   // spinner timer so they always draw a consistent line.
@@ -198,7 +214,9 @@ export async function runFindStrings(
 
   let results: MatchResult[];
   try {
+    logger.info(`Начинаю поиск по ${scannedCount} репозиториям… (concurrency=${resolved.concurrency})`);
     results = await findStrings(findOpts);
+    logger.success('Поиск завершён.');
   } finally {
     // Always stop the spinner timer — both on the normal path (where
     // `onProgress` already finished/pinned the last frame via `progress.finish`)
@@ -280,9 +298,19 @@ export async function runFindStrings(
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, payload, 'utf-8');
     wroteFile = true;
-    report(
-      `Wrote ${repositories.length} repo(s) to ${outputPath}`,
-    );
+  }
+
+  // Итоговая сводка-блок (вместо одиночной строки «Wrote N repo(s) to …»).
+  // Сводка печатается всегда; условна только строка `✓ Отчёт:` (путь есть лишь
+  // когда файл реально записан, `outputPath` может быть `undefined`).
+  const errored = repositories.filter((r) => r.error !== null);
+  progress.static(''); // разделитель между поиском и сводкой
+  progress.static(green(`✓ Отсканировано репозиториев: ${repositories.length}`));
+  if (errored.length > 0) {
+    progress.static(yellow(`⚠ Из них с ошибкой: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`));
+  }
+  if (outputPath) {
+    progress.static(green(`✓ Отчёт: ${outputPath}`));
   }
 
   if (resolved.stdout) {
