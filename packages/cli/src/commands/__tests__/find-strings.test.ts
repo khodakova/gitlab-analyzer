@@ -608,4 +608,117 @@ describe('runFindStrings (exported helper)', () => {
     // blank separator line between the search output and the summary block
     expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Отсканировано репозиториев: 2/);
   });
+
+  describe('performance metrics (--metrics-file + stderr summary)', () => {
+    it('prints a Metrics stderr summary line even without --metrics-file', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindStrings(['needle'], {});
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('Metrics:');
+    });
+
+    it('writes NDJSON run/repo/summary to --metrics-file (summary last)', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'good', description: null },
+        { id: 2, name: 'bad', description: null },
+      ]);
+      // Drive metrics through findStrings' own `opts.metrics` accumulator.
+      mocks.findStrings.mockImplementation(async (opts) => {
+        opts.metrics?.perRepo.push({
+          projectId: 1, projectName: 'good', downloadMs: 10, unzipMs: 5, scanMs: 3,
+          totalMs: 20, filesScanned: 2, filesMatched: 1, textLength: 100,
+        });
+        opts.metrics?.perRepo.push({
+          projectId: 2, projectName: 'bad', downloadMs: 60000, unzipMs: 0, scanMs: 0,
+          totalMs: 61000, filesScanned: 0, filesMatched: 0, textLength: 0, error: 'timeout',
+        });
+        opts.onProgress?.(1, 2, 'good');
+        opts.onProgress?.(2, 2, 'bad', 'timeout');
+        return [];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-${Date.now()}-${Math.random().toString(36).slice(2)}.ndjson`);
+      await runFindStrings(['needle'], { metricsFile: metricsPath });
+
+      const metricsCall = mocks.writeFile.mock.calls.find((c) => String(c[0]) === metricsPath);
+      expect(metricsCall).toBeDefined();
+      const content = String(metricsCall![1]);
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(4);
+      expect(JSON.parse(lines[0]).t).toBe('run');
+      expect(JSON.parse(lines[1]).t).toBe('repo');
+      expect(JSON.parse(lines[2]).t).toBe('repo');
+      // summary is the last line.
+      expect(JSON.parse(lines[3]).t).toBe('summary');
+      const summary = JSON.parse(lines[3]);
+      expect(summary.exitReason).toBe('complete');
+      expect(summary.repos).toBe(2);
+      expect(summary.ok).toBe(1);
+      expect(summary.errored).toBe(1);
+      expect(summary.maxRepoName).toBe('bad');
+      expect(summary.totalHeapGrowthBytes).toBeTypeOf('number');
+      const repo2 = JSON.parse(lines[2]);
+      expect(repo2.error).toBe('timeout');
+    });
+
+    it('does not create a metrics file when the flag is absent', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindStrings(['needle'], {});
+      // Only the report write happens — no metrics file.
+      expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns (not fatal) when writing --metrics-file fails', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findStrings.mockResolvedValue([]);
+      mocks.writeFile.mockImplementation(async (p: unknown) => {
+        if (String(p).includes('.ndjson')) throw new Error('disk full');
+      });
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-${Date.now()}.ndjson`);
+      const result = await runFindStrings(['needle'], { metricsFile: metricsPath });
+
+      // Report still written, command succeeds (no throw).
+      expect(result.report).toBeTruthy();
+      expect(result.outputPath).toBeTruthy();
+      await loggerModule.flushLogs();
+      expect(collectWriteCalls(stderrSpy)).toContain('Не удалось записать файл метрик (');
+    });
+
+    it('writes run+summary with exitReason=cancel on interactive empty selection', async () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((((_code?: number | string | null) => {
+        throw new Error(`process.exit(${String(_code)})`);
+      }) as never));
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([{ id: 1, name: 'alpha', description: null }]);
+      mocks.repoSelect.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-cancel-${Date.now()}.ndjson`);
+      await runFindStrings(['needle'], { interactive: true, metricsFile: metricsPath })
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(0)') return;
+          throw e;
+        });
+
+      const metricsCall = mocks.writeFile.mock.calls.find((c) => String(c[0]) === metricsPath);
+      expect(metricsCall).toBeDefined();
+      const content = String(metricsCall![1]);
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0]).t).toBe('run');
+      expect(JSON.parse(lines[0]).exitReason).toBe('cancel');
+      expect(JSON.parse(lines[1]).t).toBe('summary');
+      expect(JSON.parse(lines[1]).exitReason).toBe('cancel');
+      exitSpy.mockRestore();
+    });
+  });
 });

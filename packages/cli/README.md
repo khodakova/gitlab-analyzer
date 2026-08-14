@@ -80,6 +80,7 @@ gitlab-analyzer find-strings [options] <strings...>
 | `--stdout` | Also write the report to stdout (handy for piping) | off |
 | `-o, --output <path>` | Where to write the report; omit for an auto-generated name | auto-name |
 | `-c, --concurrency <n>` | Max parallel archive-fetch + zip-parse tasks | `5` |
+| `--metrics-file <path>` | Write performance metrics (NDJSON: `run`/`repo`/`summary`) to a file. Diagnostic only — does not affect the report | — |
 | `--interactive` | Pick repos manually before searching (space toggles, Enter confirms) | off |
 | `--enable-logs` | Verbose debug/API logging (auto-enabled with `--interactive`) | off |
 | `-h, --help` | Show help | — |
@@ -229,6 +230,39 @@ search or print an empty summary.
 ```bash
 gitlab-analyzer find-strings 'TODO' --stdout | jq '.repositories[].projectName'
 ```
+
+## Performance metrics
+
+Every run prints a compact `Metrics:` summary line to **stderr** right after the
+`✓ Отсканировано…` block — run-level aggregates only, so the normal run stays
+uncluttered:
+
+```
+Metrics: 12 repos · list 1.2s (3 pg, 12 repos) · total 34.5s · avg 2.8s · max my-frontend-app (8.1s) · heap Δ+23.4 MB
+```
+
+`heap Δ` is the run-scope heap-growth (`heapUsed` after − before the search); it
+may be negative if a GC ran between the two samples.
+
+For per-repo detail (download/unzip/scan timings, file counts, matched/errored
+repos) pass `--metrics-file <path>`. It writes **NDJSON** — one JSON object per
+line, three record kinds:
+
+```jsonl
+{"t":"run","exitReason":"complete","listMs":1234,"pagesFetched":3,"reposFound":12,"totalWallMs":34500,"totalPerRepoMs":33899,"startedAt":"...","finishedAt":"..."}
+{"t":"repo","projectId":42,"projectName":"my-frontend-app","downloadMs":4100,"unzipMs":2500,"scanMs":1450,"totalMs":8100,"filesScanned":340,"filesMatched":12,"textLength":125000,"error":null}
+{"t":"summary","exitReason":"complete","repos":12,"ok":11,"errored":1,"totalWallMs":34500,"totalPerRepoMs":33899,"avgRepoMs":2825,"maxRepoMs":8100,"maxRepoName":"my-frontend-app","totalHeapGrowthBytes":24536600}
+```
+
+- `t: "run"` — whole-run list + wall-clock metrics (`exitReason` is
+  `complete` | `cancel` | `no-repos`).
+- `t: "repo"` — one per processed repo (`error` is `null` on success, else the
+  message; for a failed repo `downloadMs` ≈ the timeout spent).
+- `t: "summary"` — always the **last** line; run-level aggregates.
+
+Metrics are diagnostics: they never change the report itself, and `--metrics-file`
+is a CLI-only flag (never read from config or env). A failure to write the metrics
+file is a warning on stderr, never a fatal error — the report is already written.
 
 ## Good to know
 

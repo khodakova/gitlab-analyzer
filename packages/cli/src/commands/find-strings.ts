@@ -7,6 +7,7 @@ import {
   configureLogger,
   logger,
   flushLogs,
+  formatDuration,
   type FindStringsOptions,
   type MatchResult,
   type RepoInfo,
@@ -15,6 +16,8 @@ import {
   axiosInstance,
   getAllProjects,
   type SearchProjectsItem,
+  type SearchMetrics,
+  type RepoTiming,
 } from '@gitlab-analyzer/core/internal';
 import { repoSelect } from '../utils/repo-select.ts';
 import { progress, report, renderProgressFrame } from '../utils/progress.ts';
@@ -50,6 +53,9 @@ export async function runFindStrings(
   strings: string[],
   opts: FindStringsCliOptions,
 ): Promise<{ report: Report; outputPath: string | undefined }> {
+  // Run-scope timing anchor. Must be the FIRST statement so totalWallMs
+  // captures the whole run (config load, list fetch, search, report write).
+  const startedAt = new Date();
   const config = await loadConfig();
   const resolution = resolveOptions(strings, opts, config);
 
@@ -101,15 +107,121 @@ export async function runFindStrings(
     progress.spin('Получение списка репозиториев…');
   }, 150);
 
+  // Run-scope metrics accumulator (SearchMetrics, from core/internal). Filled
+  // by findStrings (list + per-repo) and by this CLI (run-scope heap growth).
+  // Memory is sampled once before the list fetch and once at the end — the
+  // difference (totalHeapGrowthBytes) may be negative after GC.
+  const metrics: SearchMetrics = {
+    list: { listMs: 0, pagesFetched: 0, reposFound: 0 },
+    perRepo: [],
+    summary: {},
+  };
+  const heapBefore = process.memoryUsage().heapUsed;
+
   let allProjects: SearchProjectsItem[];
   try {
     logger.info(`Получение списка репозиториев (repoNameFilter='${resolved.repoNameFilter ?? ''}')…`);
-    allProjects = await getAllProjects(resolved.repoNameFilter);
+    allProjects = await getAllProjects(resolved.repoNameFilter, metrics.list);
     logger.info(`Список репозиториев получен: ${allProjects.length}`);
   } finally {
     clearInterval(fetchReposTimer);
     progress.clear();
   }
+
+  /**
+   * Write the `--metrics-file` NDJSON (run / one-repo-per-line / summary) and
+   * print the stderr metrics summary. Call on every normal exit of
+   * `runFindStrings`: `complete` (after the report is written), `cancel`
+   * (interactive empty selection) and `no-repos` (headless zero-repo guard).
+   * A write error is a warning, never fatal — the report is already written.
+   */
+  const writeSummaryRecord = async (
+    reason: 'complete' | 'cancel' | 'no-repos',
+  ): Promise<void> => {
+    const heapAfter = process.memoryUsage().heapUsed;
+    const totalHeapGrowthBytes = heapAfter - heapBefore;
+    metrics.summary.totalHeapGrowthBytes = totalHeapGrowthBytes;
+
+    const totalWallMs = Date.now() - startedAt.getTime();
+    const repoRows = metrics.perRepo;
+    const totalPerRepoMs = repoRows.reduce((acc, t) => acc + t.totalMs, 0);
+    const repos = repoRows.length;
+    const ok = repoRows.filter((t) => t.error === undefined).length;
+    const errored = repos - ok;
+    const max = repoRows.reduce<RepoTiming | undefined>(
+      (acc, t) => (acc === undefined || t.totalMs > acc.totalMs ? t : acc),
+      undefined,
+    );
+
+    // stderr metrics summary (compact run-level aggregates; no per-repo detail).
+    if (repos > 0) {
+      const avgRepoMs = repos > 0 ? totalPerRepoMs / repos : 0;
+      const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
+      progress.static(
+        `Metrics: ${repos} repos · list ${formatDuration(metrics.list.listMs)} (${metrics.list.pagesFetched} pg, ${metrics.list.reposFound} repos) · total ${formatDuration(totalWallMs)} · avg ${formatDuration(avgRepoMs)} · max ${max?.projectName ?? '-'} (${formatDuration(max?.totalMs ?? 0)}) · heap Δ${heapMb} MB`,
+      );
+    } else {
+      const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
+      progress.static(
+        `Metrics: exit=${reason} · list ${formatDuration(metrics.list.listMs)} · total ${formatDuration(totalWallMs)} · heap Δ${heapMb} MB`,
+      );
+    }
+
+    if (!resolved.metricsFile) {
+      return;
+    }
+
+    const runRecord = {
+      t: 'run',
+      exitReason: reason,
+      listMs: metrics.list.listMs,
+      pagesFetched: metrics.list.pagesFetched,
+      reposFound: metrics.list.reposFound,
+      totalWallMs,
+      totalPerRepoMs,
+      startedAt: startedAt.toISOString(),
+      finishedAt: new Date().toISOString(),
+    };
+    const repoRecords = repoRows.map((t) => ({
+      t: 'repo',
+      projectId: t.projectId,
+      projectName: t.projectName,
+      downloadMs: t.downloadMs,
+      unzipMs: t.unzipMs,
+      scanMs: t.scanMs,
+      totalMs: t.totalMs,
+      filesScanned: t.filesScanned,
+      filesMatched: t.filesMatched,
+      textLength: t.textLength,
+      error: t.error ?? null,
+    }));
+    const summaryRecord = {
+      t: 'summary',
+      exitReason: reason,
+      repos,
+      ok,
+      errored,
+      totalWallMs,
+      totalPerRepoMs,
+      avgRepoMs: repos > 0 ? totalPerRepoMs / repos : 0,
+      maxRepoMs: max?.totalMs ?? 0,
+      maxRepoName: max?.projectName ?? null,
+      totalHeapGrowthBytes,
+    };
+
+    const lines = [runRecord, ...repoRecords, summaryRecord].map((r) =>
+      JSON.stringify(r),
+    );
+    try {
+      await mkdir(dirname(resolved.metricsFile), { recursive: true });
+      await writeFile(resolved.metricsFile, `${lines.join('\n')}\n`, 'utf-8');
+    } catch (err) {
+      logger.warn(
+        `Не удалось записать файл метрик (${resolved.metricsFile}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
   const excludeList = resolved.excludeRepos;
   const filtered = allProjects.filter(
     (project) =>
@@ -127,6 +239,7 @@ export async function runFindStrings(
     selectedRepos = await repoSelect(repos);
 
     if (selectedRepos.length === 0) {
+      await writeSummaryRecord('cancel');
       report('Поиск отменён: не выбрано ни одного репозитория.');
       await flushLogs();
       process.exit(0);
@@ -137,6 +250,7 @@ export async function runFindStrings(
     // the filter/exclusions simply matched nothing.
     if (repos.length === 0) {
       logger.info('Репозитории не найдены: фильтр/исключения не дали результатов.');
+      await writeSummaryRecord('no-repos');
       await flushLogs();
       process.exit(0);
     }
@@ -190,6 +304,7 @@ export async function runFindStrings(
     pathFilter: resolved.pathFilter,
     includeTests: resolved.includeTests,
     concurrency: resolved.concurrency,
+    metrics,
     onRepoStart: (repo) => {
       lastStartedRepo = repo;
       progress.spin(currentFrame());
@@ -312,6 +427,10 @@ export async function runFindStrings(
   if (outputPath) {
     progress.static(green(`✓ Отчёт: ${outputPath}`));
   }
+
+  // Metrics summary (stderr) + optional --metrics-file write, at the normal
+  // end of the run.
+  await writeSummaryRecord('complete');
 
   if (resolved.stdout) {
     process.stdout.write(`${payload}\n`);

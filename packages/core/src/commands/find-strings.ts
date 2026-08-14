@@ -112,6 +112,30 @@ export type FindStringsOptions = {
    * (e.g. a CLI that built the repo picker) avoid a duplicate network call.
    */
   projects?: readonly SearchProjectsItem[];
+
+  /**
+   * Optional callback fired once per processed repository (both success AND
+   * failure), immediately after `onProgress`. Carries per-repo performance
+   * metrics (download/unzip/scan durations, aggregated file stats, and the
+   * `error` message for a repo whose archive could not be fetched). This is a
+   * separate channel from the `MatchResult` result — it does NOT alter the
+   * returned array or the report shape. `findStrings` remains pure (it only
+   * calls the callback, it never writes output itself).
+   * @param timing - Per-repo performance metrics for the repository that just
+   *   finished processing.
+   */
+  onRepoTiming?: (timing: RepoTiming) => void;
+
+  /**
+   * Optional shared mutable accumulator for run-scope search metrics. When
+   * provided, `findStrings` writes list metrics (into `metrics.list`) and
+   * appends one entry to `metrics.perRepo` for each processed repository (via
+   * {@link onRepoTiming}). Intended for CLIs/mcp servers that want the whole
+   * run's metrics in one place; ordinary library callers can ignore it and use
+   * {@link onRepoTiming} directly. Not part of the public API contract — the
+   * CLI consumes it from `@gitlab-analyzer/core/internal`.
+   */
+  metrics?: SearchMetrics;
 };
 
 /**
@@ -166,6 +190,50 @@ export type MatchResult = {
 type FileMatch = MatchResult['results'][number];
 
 /**
+ * Per-repository performance metrics, emitted via {@link FindStringsOptions.onRepoTiming}.
+ *
+ * Breakdown is per phase: `downloadMs` (archive fetch), `unzipMs` (in-memory
+ * unzip), `scanMs` (the file-content search loop). `totalMs` is the whole repo
+ * (measured from `onRepoStart` to readiness) and is NOT necessarily the sum of
+ * the three phases — there is per-result parsing and external overhead on top.
+ *
+ * Memory is deliberately NOT part of this type: heap is sampled once per RUN
+ * (`totalHeapGrowthBytes`), not per repo.
+ */
+export type RepoTiming = {
+  projectId: number;
+  projectName: string;
+  downloadMs: number;
+  unzipMs: number;
+  scanMs: number;
+  totalMs: number;
+  /** Number of files that passed the filters and were content-scanned. */
+  filesScanned: number;
+  /** Number of scanned files that contained at least one search string. */
+  filesMatched: number;
+  /** UTF-16 code units from `content.length`, not byte count. */
+  textLength: number;
+  /** Set for a repo whose archive could not be fetched. */
+  error?: string;
+};
+
+/**
+ * Run-scope accumulator for search metrics. A single flat mutable record that
+ * `findStrings` fills in place as it runs — `list` from the project-list fetch,
+ * `perRepo` appended per processed repo, `summary` for run-scope heap growth.
+ *
+ * This is an internal (NOT public `index.ts`) type: the CLI consumes it via
+ * `@gitlab-analyzer/core/internal`.
+ */
+export type SearchMetrics = {
+  list: { listMs: number; pagesFetched: number; reposFound: number };
+  /** Grows as repositories finish (same entries as `onRepoTiming`). */
+  perRepo: RepoTiming[];
+  /** Run-scope summary. `totalHeapGrowthBytes` may be negative (GC). */
+  summary: { totalHeapGrowthBytes?: number };
+};
+
+/**
  * Search a single ZIP archive for files containing any of the given search
  * strings, applying the path and test-file filters.
  *
@@ -173,26 +241,42 @@ type FileMatch = MatchResult['results'][number];
  *   that have not yet converted). `null` yields an empty result.
  * @param searchStrings - Substrings to search for (logical OR).
  * @param filters - `pathFilter` substring and `includeTests` flag.
+ * @param metrics - Optional mutable accumulator. Filled with the unzip
+ *   duration, the scan-loop duration, and aggregated per-file counters
+ *   (filesScanned/filesMatched/textLength). Caller is expected to
+ *   pre-initialise the fields to 0; this function only writes when it actually
+ *   measures (e.g. `archive === null` → untouched, stays at the caller's zeroes).
  * @returns Array of `{filename, matches, content}` for every matching file.
  *   On ZIP parse error returns `[]` silently.
  */
-async function findStrInZip(
+export async function findStrInZip(
   archive: Blob | ArrayBuffer | null,
   searchStrings: string[],
   filters: { pathFilter: string; includeTests: boolean },
+  metrics?: {
+    unzipMs: number;
+    scanMs: number;
+    filesScanned: number;
+    filesMatched: number;
+    textLength: number;
+  },
 ): Promise<FileMatch[]> {
   if (archive === null) {
     return [];
   }
 
   const results: FileMatch[] = [];
+  let scanMs = 0;
 
   try {
     const zip = new JSZip();
     logger.debug('Распаковка архива… (загрузка zip в память)');
+    const tUnzip = Date.now();
     await zip.loadAsync(archive);
+    if (metrics) metrics.unzipMs = Date.now() - tUnzip;
     logger.debug(`Архив распакован: ${Object.keys(zip.files).length} файлов, ищу подстроки…`);
 
+    const tScan = Date.now();
     for (const [filename, file] of Object.entries(zip.files)) {
       if (file.dir) {
         continue;
@@ -206,14 +290,27 @@ async function findStrInZip(
 
       const content = await file.async('text');
 
+      // Aggregate per-file counters only AFTER the content is decoded (need
+      // `content.length`). textLength is UTF-16 code units, not byte count.
+      if (metrics) {
+        metrics.filesScanned++;
+        metrics.textLength += content.length;
+        if (searchStrings.some((s) => content.includes(s))) {
+          metrics.filesMatched++;
+        }
+      }
+
       if (searchStrings.some((s) => content.includes(s))) {
         const matches = searchStrings.filter((s) => content.includes(s));
         const lines = content.split('\n');
         results.push({ filename, matches, content: lines });
       }
     }
+    scanMs = Date.now() - tScan;
   } catch {
     return [];
+  } finally {
+    if (metrics) metrics.scanMs = scanMs;
   }
 
   return results;
@@ -270,7 +367,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
 
   const allProjects =
     opts.projects ??
-    (await getAllProjects(opts.repoNameFilter ?? ''));
+    (await getAllProjects(opts.repoNameFilter ?? '', opts.metrics?.list));
   const projects = allProjects.filter(
     (project): project is SearchProjectsItem & { name: string } =>
       project.name !== null &&
@@ -289,12 +386,20 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
   const tasks = projects.map((project) => limit(async (): Promise<MatchResult | null> => {
     opts.onRepoStart?.(project.name);
     logger.debug(`Скачивание архива: ${project.name} (id=${project.id}, branch=${branch})…`);
-    let archive: Blob | ArrayBuffer | null;
+
+    // Per-repo timing: local accumulators (not `opts.metrics.perRepo`), so a
+    // failed repo doesn't leak partial data into `metrics.perRepo` — the full
+    // RepoTiming is appended once at the end for BOTH success and failure.
+    const t0 = performance.now();
+    const archMetrics = { downloadMs: 0 };
+    const zipMetrics = { unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0 };
+    let archive: Blob | ArrayBuffer | null = null;
     let errorMsg: string | undefined;
     try {
       archive = await getProjectArchive(project.id, {
         projectName: project.name,
         branch,
+        metrics: archMetrics,
       });
       if (archive === null) {
         // Compatibility path: callers that still return `null` (instead of
@@ -305,6 +410,25 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
       archive = null;
       errorMsg = err instanceof Error ? err.message : String(err);
     }
+
+    let fileMatches: FileMatch[] = [];
+    if (errorMsg === undefined && archive !== null) {
+      fileMatches = await findStrInZip(archive, searchStrings, { pathFilter, includeTests }, zipMetrics);
+    }
+
+    // Build the per-repo timing regardless of success/failure.
+    const timing: RepoTiming = {
+      projectId: project.id,
+      projectName: project.name,
+      downloadMs: archMetrics.downloadMs,
+      unzipMs: zipMetrics.unzipMs,
+      scanMs: zipMetrics.scanMs,
+      totalMs: performance.now() - t0,
+      filesScanned: zipMetrics.filesScanned,
+      filesMatched: zipMetrics.filesMatched,
+      textLength: zipMetrics.textLength,
+      ...(errorMsg !== undefined ? { error: errorMsg } : {}),
+    };
 
     if (errorMsg !== undefined) {
       logger.warn(`Архив не получен: ${project.name} (${errorMsg})`);
@@ -322,17 +446,18 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
           }
         });
       }
+      // Emit per-repo timing for the failed repo too (downloadMs ≈ timeout).
+      opts.onRepoTiming?.(timing);
+      opts.metrics?.perRepo.push(timing);
       return null;
     }
-
-    const fileMatches = await findStrInZip(archive, searchStrings, {
-      pathFilter,
-      includeTests,
-    });
 
     logger.success(`Готово: ${project.name} (${fileMatches.length} файл(ов) с совпадениями)`);
     done++;
     opts.onProgress?.(done, total, project.name);
+
+    opts.onRepoTiming?.(timing);
+    opts.metrics?.perRepo.push(timing);
 
     return {
       projectId: project.id,

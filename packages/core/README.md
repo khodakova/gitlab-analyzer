@@ -407,6 +407,33 @@ programmatic runs.
 list — useful when a caller has already loaded the repos (e.g. a CLI that built
 the picker). `excludeRepos` / `selectedRepos` are still applied on top.
 
+### Performance metrics (`onRepoTiming`)
+
+For diagnosing where time goes, `findStrings` accepts an optional
+`onRepoTiming(timing)` callback that fires once per processed repository (both
+success **and** failure) with per-repo performance data — download/unzip/scan
+durations, `totalMs`, and aggregated per-file counters (`filesScanned`,
+`filesMatched`, `textLength`), plus `error` for a repo whose archive could not
+be fetched:
+
+```ts
+await findStrings({
+  searchStrings: ['console.log'],
+  branch: 'develop',
+  onRepoTiming: (t) => {
+    // t = { projectId, projectName, downloadMs, unzipMs, scanMs, totalMs,
+    //       filesScanned, filesMatched, textLength, error? }
+  },
+});
+```
+
+This is a separate channel from the returned `MatchResult[]` — the result and
+report shapes are unchanged. Heap usage is sampled per run (not per repo); the
+CLI surfaces it via `--metrics-file`. The first-class API to get metrics is
+`onRepoTiming`; `findStrings` also accepts an optional internal `metrics`
+accumulator (typed as `SearchMetrics`, from `@gitlab-analyzer/core/internal`)
+that collects the same data plus list metrics in one place for CLI-style tools.
+
 ## Output Schema
 
 ### Library API (`findStrings`)

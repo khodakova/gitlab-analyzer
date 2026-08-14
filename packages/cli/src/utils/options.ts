@@ -31,6 +31,8 @@ export type FindStringsCliOptions = {
   enableLogs?: boolean;
   format?: 'txt' | 'json';
   stdout?: boolean;
+  /** Path to write performance metrics (NDJSON). Diagnostic; only via CLI flag. */
+  metricsFile?: string;
 };
 
 /**
@@ -62,6 +64,8 @@ export type ResolvedFindStringsOptions = {
   format: 'txt' | 'json';
   /** When true, also write the report to stdout (in addition to the file). */
   stdout: boolean;
+  /** Path to write performance metrics (NDJSON); `undefined` → no metrics file. */
+  metricsFile: string | undefined;
 };
 
 /**
@@ -165,6 +169,9 @@ export function resolveOptions(
     enableLogs,
     format: cliOpts.format ?? 'json',
     stdout: cliOpts.stdout ?? false,
+    // metricsFile comes ONLY from the CLI flag (diagnostic, opt-in) — never
+    // from config or env (spec decision 12).
+    metricsFile: cliOpts.metricsFile,
   };
 
   if (errors.length > 0) {

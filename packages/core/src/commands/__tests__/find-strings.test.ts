@@ -24,7 +24,7 @@ vi.mock('../../api/project-archive.ts', () => ({
   getProjectArchive: getProjectArchiveMock,
 }));
 
-import { findStrings } from '../find-strings.ts';
+import { findStrings, findStrInZip } from '../find-strings.ts';
 import type { SearchProjectsItem } from '../../types.ts';
 import { configureLogger, logger, flushLogs } from '../../utils/logger.ts';
 
@@ -456,7 +456,9 @@ describe('findStrings', () => {
         // no repoNameFilter
       });
 
-      expect(getAllProjectsMock).toHaveBeenCalledWith('');
+      // Second arg is the (optional) list-metrics accumulator — undefined when
+      // no metrics were supplied by the caller.
+      expect(getAllProjectsMock).toHaveBeenCalledWith('', undefined);
     });
 
     it('passes explicit repoNameFilter to getAllProjects', async () => {
@@ -470,7 +472,7 @@ describe('findStrings', () => {
         repoNameFilter: 'frontend',
       });
 
-      expect(getAllProjectsMock).toHaveBeenCalledWith('frontend');
+      expect(getAllProjectsMock).toHaveBeenCalledWith('frontend', undefined);
     });
 
     it('passes branch to getProjectArchive for every project', async () => {
@@ -490,10 +492,12 @@ describe('findStrings', () => {
       expect(getProjectArchiveMock).toHaveBeenNthCalledWith(1, 1, {
         projectName: 'a',
         branch: 'feature/special',
+        metrics: { downloadMs: 0 },
       });
       expect(getProjectArchiveMock).toHaveBeenNthCalledWith(2, 2, {
         projectName: 'b',
         branch: 'feature/special',
+        metrics: { downloadMs: 0 },
       });
     });
 
@@ -752,6 +756,143 @@ describe('findStrings', () => {
       await findStrings({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
       expect(collect()).toContain('[debug] Скачивание архива: repo-dbg (id=1, branch=main)…');
+    });
+  });
+
+  describe('case 13: findStrInZip metrics accumulator', () => {
+    it('fills unzipMs/scanMs/filesScanned/filesMatched/textLength', async () => {
+      const archive = await makeZip({
+        '/src/a.ts': 'TARGET here',
+        '/src/b.ts': 'no match',
+        '/docs/skip.ts': 'TARGET but wrong path',
+      });
+      const metrics = {
+        unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0,
+      };
+
+      const results = await findStrInZip(
+        archive,
+        ['TARGET'],
+        { pathFilter: '/src/', includeTests: false },
+        metrics,
+      );
+
+      // Only /src/a.ts and /src/b.ts passed the path filter → 2 scanned.
+      expect(metrics.filesScanned).toBe(2);
+      // Only /src/a.ts matched.
+      expect(metrics.filesMatched).toBe(1);
+      // textLength = sum of content.length (UTF-16 code units).
+      expect(metrics.textLength).toBe('TARGET here'.length + 'no match'.length);
+      expect(metrics.unzipMs).toBeGreaterThanOrEqual(0);
+      expect(metrics.scanMs).toBeGreaterThanOrEqual(0);
+      expect(results).toHaveLength(1);
+    });
+
+    it('leaves metrics untouched (zeroes) when archive is null', async () => {
+      const metrics = {
+        unzipMs: 0, scanMs: 0, filesScanned: -1, filesMatched: -1, textLength: -1,
+      } as { unzipMs: number; scanMs: number; filesScanned: number; filesMatched: number; textLength: number };
+
+      const results = await findStrInZip(null, ['X'], { pathFilter: '/', includeTests: false }, metrics);
+
+      expect(results).toEqual([]);
+      // archive === null → the function returns early and must NOT touch metrics.
+      expect(metrics).toEqual({
+        unzipMs: 0, scanMs: 0, filesScanned: -1, filesMatched: -1, textLength: -1,
+      });
+    });
+  });
+
+  describe('case 14: onRepoTiming callback', () => {
+    it('fires once per repo (success AND failure) with correct fields', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'good' }),
+        project({ id: 2, name: 'bad' }),
+      ]);
+      getProjectArchiveMock.mockImplementation(async (id: number) => {
+        if (id === 2) throw new Error('boom');
+        return archive;
+      });
+
+      const timings: Array<{ name: string; totalMs: number; phases: number }> = [];
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        onRepoTiming: (t) => {
+          timings.push({ name: t.projectName, totalMs: t.totalMs, phases: t.downloadMs + t.unzipMs + t.scanMs });
+        },
+      });
+
+      expect(timings).toHaveLength(2);
+      const good = timings.find((t) => t.name === 'good');
+      const bad = timings.find((t) => t.name === 'bad');
+      expect(good).toBeDefined();
+      expect(bad).toBeDefined();
+      expect(results).toHaveLength(1);
+      expect(results[0].projectName).toBe('good');
+    });
+
+    it('emits a timing with error for a failed repo, downloadMs >= 0, phases zero', async () => {
+      getAllProjectsMock.mockResolvedValue([project({ id: 5, name: 'broken' })]);
+      getProjectArchiveMock.mockRejectedValue(new Error('превышен таймаут'));
+
+      let timing: import('../find-strings.ts').RepoTiming | undefined;
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        onRepoTiming: (t) => { timing = t; },
+      });
+
+      expect(timing).toBeDefined();
+      expect(timing!.error).toContain('превышен таймаут');
+      expect(timing!.downloadMs).toBeGreaterThanOrEqual(0);
+      expect(timing!.unzipMs).toBe(0);
+      expect(timing!.scanMs).toBe(0);
+      expect(timing!.totalMs).toBeGreaterThanOrEqual(timing!.downloadMs);
+      expect(timing!.filesScanned).toBe(0);
+      expect(timing!.textLength).toBe(0);
+    });
+
+    it('fills opts.metrics.perRepo with one entry per repo', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'a' }),
+        project({ id: 2, name: 'b' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const metrics = { list: { listMs: 0, pagesFetched: 0, reposFound: 0 }, perRepo: [] as never[], summary: {} };
+
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        metrics: metrics as never,
+      });
+
+      expect(metrics.perRepo).toHaveLength(2);
+      const names = (metrics.perRepo as Array<{ projectName: string }>)
+        .map((t) => t.projectName)
+        .sort();
+      expect(names).toEqual(['a', 'b']);
+    });
+  });
+
+  describe('case 15: regression — MatchResult share unchanged', () => {
+    it('result shape is bit-for-bit identical to before (no metric fields leaked)', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findStrings({ searchStrings: ['X'], branch: 'main' });
+      expect(results).toHaveLength(1);
+      expect(Object.keys(results[0]).sort()).toEqual([
+        'projectDescription',
+        'projectId',
+        'projectName',
+        'results',
+        'resultsLength',
+      ]);
     });
   });
 });

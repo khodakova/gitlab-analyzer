@@ -28,11 +28,22 @@ export async function getProjectRepositorySize(projectId: number): Promise<numbe
   }
 }
 
-export async function getProjectArchive(projectId: number, options?: { projectName?: string, branch?: string }) {
+export async function getProjectArchive(
+  projectId: number,
+  options?: {
+    projectName?: string;
+    branch?: string;
+    /** Mutable accumulator, filled with the download duration (ms). */
+    metrics?: { downloadMs: number };
+  },
+) {
   const projectName = options?.projectName ?? String(projectId);
   const branch = options?.branch;
+  // Hoisted BEFORE the try so the catch path can safely write downloadMs (t0
+  // is always defined even if the error is thrown synchronously before any
+  // request starts).
+  const t0 = Date.now();
   try {
-    const startedAt = Date.now();
     let lastLoggedPct = 0;
     const resp = await axiosInstance.get<Blob>(
       `/api/v4/projects/${projectId}/repository/archive.zip`,
@@ -55,7 +66,7 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
           if (pct >= lastLoggedPct + 25) {
             lastLoggedPct = pct;
             logger.debug(
-              `Загрузка ${projectName}: ${mb(e.loaded)} из ${mb(e.total)} (${pct}%) за ${formatDuration(Date.now() - startedAt)}`,
+              `Загрузка ${projectName}: ${mb(e.loaded)} из ${mb(e.total)} (${pct}%) за ${formatDuration(Date.now() - t0)}`,
             );
           }
         },
@@ -75,7 +86,10 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
     // переехало, тут будет видно конечный путь — и будет понятно, что запрос
     // следовал редиректу.
     const finalUrl = (resp.request as { responseURL?: string } | undefined)?.responseURL ?? '-';
-    logger.debug(`Архив ${projectName} скачан: статус=${resp.status}, ${mb(bytes)} за ${formatDuration(Date.now() - startedAt)}, url=${finalUrl}`);
+    logger.debug(`Архив ${projectName} скачан: статус=${resp.status}, ${mb(bytes)} за ${formatDuration(Date.now() - t0)}, url=${finalUrl}`);
+    if (options?.metrics) {
+      options.metrics.downloadMs = Date.now() - t0;
+    }
     return resp.data;
   } catch (err) {
     // Per-project recovery: the archive for a single repo is unreachable
@@ -99,6 +113,11 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
       ? `превышен таймаут скачивания архива (60с)`
       : message;
     logger.warn(`Не удалось получить архив по проекту ${projectName} ${projectId}: ${finalMessage}${cfgUrl ? ` (url=${cfgUrl})` : ''}`);
+    // Fill downloadMs on the failure path too — reflects wall-clock time spent
+    // before the throw (typically the 60s timeout for a stuck download).
+    if (options?.metrics) {
+      options.metrics.downloadMs = Date.now() - t0;
+    }
     throw isTimeout ? new Error(finalMessage) : err;
   }
 }

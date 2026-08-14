@@ -19,7 +19,11 @@ async function getProjectsByNamespaceQuery(params: { search?: string | null, pag
   return axiosInstance.get<SearchProjectsItem[]>(`/api/v4/projects?${query}`);
 }
 
-export async function getAllProjects(search?: string | null) {
+export async function getAllProjects(
+  search?: string | null,
+  metrics?: { listMs: number; pagesFetched: number; reposFound: number },
+) {
+  const t = Date.now();
   const [firstPageResult, totalPages] = await getProjectsByNamespaceQuery({ page: 1, search })
     .then((res) => {
       const projects = res.data
@@ -51,6 +55,15 @@ export async function getAllProjects(search?: string | null) {
   ];
 
   logger.debug(`Найдено репозиториев: ${projects.length}`);
+
+  if (metrics) {
+    // Actual count of pages fetched during pagination: page 1 plus every
+    // parallel page request fired (2..totalPages). This is the genuine number
+    // of HTTP calls made, not the raw `x-total-pages` header.
+    metrics.listMs = Date.now() - t;
+    metrics.pagesFetched = 1 + restQueriesOnProjects.length;
+    metrics.reposFound = projects.length;
+  }
 
   return projects;
 }

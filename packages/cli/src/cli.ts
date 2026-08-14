@@ -82,6 +82,10 @@ export function buildProgram(): Command {
     )
     .option('-o, --output <path>', 'Path to write the report; omit to use an auto-generated file name')
     .option(
+      '--metrics-file <path>',
+      'Write performance metrics (NDJSON: run/repo/summary) to this file. Diagnostic only — does not affect the report.',
+    )
+    .option(
       '-c, --concurrency <n>',
       'Maximum number of parallel archive-fetch + zip-parse tasks',
       (val: string) => parseInt(val, 10),

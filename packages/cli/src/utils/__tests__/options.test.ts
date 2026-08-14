@@ -305,4 +305,22 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       }
     });
   });
+
+  describe('metricsFile', () => {
+    it('defaults to undefined when the CLI flag is absent', () => {
+      const res = resolveOptions(['x'], {}, emptyConfig() as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.metricsFile).toBeUndefined();
+    });
+
+    it('resolves from the CLI flag only (not config)', () => {
+      const res = resolveOptions(
+        ['x'],
+        { metricsFile: './m.ndjson' },
+        emptyConfig() as never,
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.metricsFile).toBe('./m.ndjson');
+    });
+  });
 });
