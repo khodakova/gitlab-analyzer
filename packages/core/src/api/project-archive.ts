@@ -1,6 +1,5 @@
 import { axiosInstance } from './config.ts';
-import { red } from 'colorette';
-import { logger } from '../utils/logger.ts';
+import { logger, formatDuration } from '../utils/logger.ts';
 
 function mb(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -56,7 +55,7 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
           if (pct >= lastLoggedPct + 25) {
             lastLoggedPct = pct;
             logger.debug(
-              `Загрузка ${projectName}: ${mb(e.loaded)} из ${mb(e.total)} (${pct}%) за ${((Date.now() - startedAt) / 1000).toFixed(1)}с`,
+              `Загрузка ${projectName}: ${mb(e.loaded)} из ${mb(e.total)} (${pct}%) за ${formatDuration(Date.now() - startedAt)}`,
             );
           }
         },
@@ -76,7 +75,7 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
     // переехало, тут будет видно конечный путь — и будет понятно, что запрос
     // следовал редиректу.
     const finalUrl = (resp.request as { responseURL?: string } | undefined)?.responseURL ?? '-';
-    logger.debug(`Архив ${projectName} скачан: статус=${resp.status}, ${mb(bytes)} за ${((Date.now() - startedAt) / 1000).toFixed(1)}с, url=${finalUrl}`);
+    logger.debug(`Архив ${projectName} скачан: статус=${resp.status}, ${mb(bytes)} за ${formatDuration(Date.now() - startedAt)}, url=${finalUrl}`);
     return resp.data;
   } catch (err) {
     // Per-project recovery: the archive for a single repo is unreachable
@@ -99,7 +98,7 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
     const finalMessage = isTimeout
       ? `превышен таймаут скачивания архива (60с)`
       : message;
-    logger.debug(red(`Не удалось получить архив по проекту ${projectName} ${projectId}: ${finalMessage}${cfgUrl ? ` (url=${cfgUrl})` : ''}`));
+    logger.warn(`Не удалось получить архив по проекту ${projectName} ${projectId}: ${finalMessage}${cfgUrl ? ` (url=${cfgUrl})` : ''}`);
     throw isTimeout ? new Error(finalMessage) : err;
   }
 }

@@ -48,4 +48,4 @@ export type {
 } from './commands/find-strings.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
-export { configureLogger, logger } from './utils/logger.ts';
+export { configureLogger, logger, flushLogs, formatDuration } from './utils/logger.ts';

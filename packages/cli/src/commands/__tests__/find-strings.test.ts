@@ -89,7 +89,11 @@ describe('runFindStrings (exported helper)', () => {
     mocks.getAllProjects.mockReset();
     mocks.existsSync.mockReset();
     mocks.existsSync.mockReturnValue(false);
-    mocks.getAllProjects.mockResolvedValue([]);
+    // Default to one project so normal headless scans get past the 0-repo
+    // guard; tests that exercise the empty case set `[]` explicitly.
+    mocks.getAllProjects.mockResolvedValue([
+      { id: 1, name: 'alpha', description: null },
+    ]);
   });
 
   afterEach(() => {
@@ -120,7 +124,13 @@ describe('runFindStrings (exported helper)', () => {
       concurrency: 3, // CLI override
     });
 
-    expect(result.report.repositories).toEqual([]);
+    // One scanned repo (default mock) with zero matches is still reported.
+    expect(result.report.repositories).toHaveLength(1);
+    expect(result.report.repositories[0]).toMatchObject({
+      projectName: 'alpha',
+      resultsLength: 0,
+      error: null,
+    });
     // No --output → an auto-named file is generated (not stdout).
     expect(result.outputPath).toMatch(/^find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
@@ -271,6 +281,14 @@ describe('runFindStrings (exported helper)', () => {
       }),
     );
 
+    // The 0-repo headless guard calls process.exit(0); swallow it here.
+    let exitSpy: ReturnType<typeof vi.spyOn>;
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((
+      _code?: number | string | null,
+    ) => {
+      throw new Error(`process.exit(${String(_code)})`);
+    }) as never);
+
     vi.useFakeTimers();
     try {
       const runPromise = runFindStrings(['x'], {});
@@ -281,12 +299,21 @@ describe('runFindStrings (exported helper)', () => {
       expect(duringFetch).toContain('Получение списка репозиториев…');
 
       resolveProjects([]);
-      await runPromise;
+      await runPromise
+        .then(() => {
+          throw new Error('expected process.exit(0) to be called');
+        })
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(0)') return;
+          throw e;
+        });
 
+      expect(exitSpy).toHaveBeenCalledWith(0);
       const afterText = collectWriteCalls(stderrSpy);
-      expect(afterText).toContain('Будет выполнен поиск по 0 репозиториям:');
+      expect(afterText).toMatch(/не найдены|фильтр|исключени/i);
     } finally {
       vi.useRealTimers();
+      exitSpy.mockRestore();
     }
   });
 
@@ -331,7 +358,6 @@ describe('runFindStrings (exported helper)', () => {
 
   it('keeps the central logger disabled when neither --enable-logs nor --interactive', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.getAllProjects.mockResolvedValue([]);
     mocks.findStrings.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
@@ -433,7 +459,6 @@ describe('runFindStrings (exported helper)', () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
     mocks.findStrings.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
-    mocks.getAllProjects.mockResolvedValue([]);
     mocks.repoSelect.mockResolvedValue([]);
 
     await runFindStrings(['needle'], {});
@@ -495,5 +520,92 @@ describe('runFindStrings (exported helper)', () => {
     const stderrText = collectWriteCalls(stderrSpy);
     expect(stderrText).toMatch(/поиск|репозитори|cancel|отмен|ничего/i);
     exitSpy.mockRestore();
+  });
+
+  it('stops early (exit 0, no search) when no repos match the filter', async () => {
+    let exitSpy: ReturnType<typeof vi.spyOn>;
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((
+      _code?: number | string | null,
+    ) => {
+      throw new Error(`process.exit(${String(_code)})`);
+    }) as never);
+
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    // No projects match the filter (explicit empty).
+    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.findStrings.mockResolvedValue([]);
+
+    await runFindStrings(['needle'], {})
+      .then(() => {
+        throw new Error('expected process.exit(0) to be called');
+      })
+      .catch((e: unknown) => {
+        if (e instanceof Error && e.message === 'process.exit(0)') return;
+        throw e;
+      });
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(mocks.findStrings).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+    const stderrText = collectWriteCalls(stderrSpy);
+    expect(stderrText).toMatch(/не найдены|фильтр|исключени/i);
+    // No misleading "searching 0 repos" phase or summary.
+    expect(stderrText).not.toContain('Начинаю поиск по 0');
+    expect(stderrText).not.toContain('Отсканировано репозиториев: 0');
+    exitSpy.mockRestore();
+  });
+
+  it('logs info phases and a success completion to stderr (visible without --enable-logs)', async () => {
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    mocks.getAllProjects.mockResolvedValue([
+      { id: 1, name: 'alpha', description: null },
+    ]);
+    mocks.findStrings.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+
+    await runFindStrings(['needle'], {});
+    // Logger writes go through an async queue; drain it before asserting stderr.
+    await loggerModule.flushLogs();
+
+    const stderrText = collectWriteCalls(stderrSpy);
+    expect(stderrText).toContain('ℹ Получение списка репозиториев');
+    expect(stderrText).toContain('Список репозиториев получен: 1');
+    expect(stderrText).toContain('ℹ Начинаю поиск по 1 репозиториям');
+    // success completion — always visible
+    expect(stderrText).toContain('✓ Поиск завершён.');
+  });
+
+  it('prints a summary block with ⚠ errored repos and the report path', async () => {
+    mocks.loadConfig.mockResolvedValue(defaultConfig());
+    mocks.getAllProjects.mockResolvedValue([
+      { id: 1, name: 'good', description: null },
+      { id: 2, name: 'bad', description: null },
+    ]);
+    mocks.findStrings.mockImplementation(async (opts) => {
+      opts.onProgress?.(1, 2, 'good');
+      opts.onProgress?.(2, 2, 'bad', 'boom');
+      return [
+        {
+          projectId: 1,
+          projectName: 'good',
+          projectDescription: null,
+          resultsLength: 1,
+          results: [
+            { filename: '/src/a.ts', matches: ['needle'], content: ['needle'] },
+          ],
+        },
+      ];
+    });
+    mocks.writeFile.mockResolvedValue(undefined);
+
+    await runFindStrings(['needle'], { output: '/tmp/out.json' });
+    await loggerModule.flushLogs();
+
+    const stderrText = collectWriteCalls(stderrSpy);
+    expect(stderrText).toContain('✓ Отсканировано репозиториев: 2');
+    expect(stderrText).toContain('⚠ Из них с ошибкой: 1 (bad)');
+    expect(stderrText).toContain('✓ Отчёт: /tmp/out.json');
+    // blank separator line between the search output and the summary block
+    expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Отсканировано репозиториев: 2/);
   });
 });

@@ -380,16 +380,26 @@ const summary = results
 await fs.writeFile('my-custom-report.json', JSON.stringify(summary, null, 2));
 ```
 
-`findStrings` never writes files, never calls `console.*`, and never calls
-`process.exit` — it is a pure async function returning the result array. All
-output / progress / process management is the caller's responsibility when
-using the library API directly.
+`findStrings` never writes files and never calls `process.exit` — it is an
+async function returning the result array. It does, however, write diagnostic
+lines to **stderr** through the shared central logger: `debug` lines are
+gated by `configureLogger({ enabled })` (off by default), while
+`info`/`success`/`warn`/`error` lines always print. For a completely silent
+library run, call `configureLogger({ enabled: false })` (see "Logging"
+below). All output / progress / process management is the caller's
+responsibility when using the library API directly.
 
 The library also exports a small central logger — `configureLogger({ enabled })`
-and `logger` (`logger.debug(...)`, `logger.error(...)`). It mirrors the CLI's
-behavior: `debug` lines are silent unless enabled (default off), `error` lines
-always print, and both go to **stderr**. Enable it when you want the internal
-API/utils debug output for your own programmatic runs.
+and `logger` (`logger.debug(...)`, `logger.info(...)`, `logger.success(...)`,
+`logger.warn(...)`, `logger.error(...)`), plus `flushLogs()` and
+`formatDuration()`. It mirrors the CLI's behavior: `debug` lines are silent
+unless enabled (default off), while `info`/`success`/`warn`/`error` always
+print, and everything goes to **stderr**. Each line is formatted with a level
+symbol and color (`[debug]` gray, `ℹ` cyan, `✓` green, `⚠` yellow, `✗` red),
+respecting `NO_COLOR`. Writes are queued so lines never interleave, even under
+concurrency. Call `flushLogs()` before `process.exit` to drain the queue.
+Enable it when you want the internal API/utils output for your own
+programmatic runs.
 
 `findStrings` accepts an optional `projects` array of already-fetched
 `SearchProjectsItem` objects. When provided, it skips the project-list fetch

@@ -1,6 +1,5 @@
 import JSZip from 'jszip';
 import pLimit from 'p-limit';
-import { yellow, bold } from 'colorette';
 import { getProjectArchive, getProjectRepositorySize } from '../api/project-archive.ts';
 import { getAllProjects } from '../utils/get-projects.ts';
 import { logger, isLoggingEnabled } from '../utils/logger.ts';
@@ -308,7 +307,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
     }
 
     if (errorMsg !== undefined) {
-      logger.debug(`Архив не получен: ${project.name} (${errorMsg})`);
+      logger.warn(`Архив не получен: ${project.name} (${errorMsg})`);
       // Сразу освобождаем слот (done++ / onProgress / return null) — чтобы
       // упавшие репо не задерживали здоровые в очереди.
       done++;
@@ -319,9 +318,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
       if (isLoggingEnabled()) {
         void getProjectRepositorySize(project.id).then((size) => {
           if (size !== undefined) {
-            logger.debug(
-              yellow(bold(`⚠ ВНИМАНИЕ: репозиторий ${project.name} не скачался — объём git-истории ${mb(size)}. Скорее всего репо раздуто; проверь или исключи его (--exclude).`)),
-            );
+            logger.warn(`ВНИМАНИЕ: репозиторий ${project.name} не скачался — объём git-истории ${mb(size)}. Скорее всего репо раздуто; проверь или исключи его (--exclude).`);
           }
         });
       }
@@ -333,7 +330,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
       includeTests,
     });
 
-    logger.debug(`Готово: ${project.name} (${fileMatches.length} файл(ов) с совпадениями)`);
+    logger.success(`Готово: ${project.name} (${fileMatches.length} файл(ов) с совпадениями)`);
     done++;
     opts.onProgress?.(done, total, project.name);
 
