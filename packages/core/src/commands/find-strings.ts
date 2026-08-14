@@ -1,8 +1,14 @@
 import JSZip from 'jszip';
 import pLimit from 'p-limit';
-import { getProjectArchive } from '../api/project-archive.ts';
+import { yellow, bold } from 'colorette';
+import { getProjectArchive, getProjectRepositorySize } from '../api/project-archive.ts';
 import { getAllProjects } from '../utils/get-projects.ts';
+import { logger, isLoggingEnabled } from '../utils/logger.ts';
 import type { SearchProjectsItem, RepoInfo } from '../types.ts';
+
+function mb(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 /**
  * Input options for {@link findStrings}.
@@ -184,7 +190,9 @@ async function findStrInZip(
 
   try {
     const zip = new JSZip();
+    logger.debug('Распаковка архива… (загрузка zip в память)');
     await zip.loadAsync(archive);
+    logger.debug(`Архив распакован: ${Object.keys(zip.files).length} файлов, ищу подстроки…`);
 
     for (const [filename, file] of Object.entries(zip.files)) {
       if (file.dir) {
@@ -281,6 +289,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
 
   const tasks = projects.map((project) => limit(async (): Promise<MatchResult | null> => {
     opts.onRepoStart?.(project.name);
+    logger.debug(`Скачивание архива: ${project.name} (id=${project.id}, branch=${branch})…`);
     let archive: Blob | ArrayBuffer | null;
     let errorMsg: string | undefined;
     try {
@@ -299,8 +308,23 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
     }
 
     if (errorMsg !== undefined) {
+      logger.debug(`Архив не получен: ${project.name} (${errorMsg})`);
+      // Сразу освобождаем слот (done++ / onProgress / return null) — чтобы
+      // упавшие репо не задерживали здоровые в очереди.
       done++;
       opts.onProgress?.(done, total, project.name, errorMsg);
+      // Диагностика размера — только при включённых логах, и НЕ блокируя слот
+      // p-limit: запускаем fire-and-forget ПОСЛЕ освобождения. Упавшее репо
+      // часто «жирное» (раздутая история); предупреждение подскажет причину.
+      if (isLoggingEnabled()) {
+        void getProjectRepositorySize(project.id).then((size) => {
+          if (size !== undefined) {
+            logger.debug(
+              yellow(bold(`⚠ ВНИМАНИЕ: репозиторий ${project.name} не скачался — объём git-истории ${mb(size)}. Скорее всего репо раздуто; проверь или исключи его (--exclude).`)),
+            );
+          }
+        });
+      }
       return null;
     }
 
@@ -309,6 +333,7 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
       includeTests,
     });
 
+    logger.debug(`Готово: ${project.name} (${fileMatches.length} файл(ов) с совпадениями)`);
     done++;
     opts.onProgress?.(done, total, project.name);
 

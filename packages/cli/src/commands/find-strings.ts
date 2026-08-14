@@ -4,6 +4,7 @@ import {
   findStrings,
   loadConfig,
   configureLogger,
+  logger,
   type FindStringsOptions,
   type MatchResult,
   type RepoInfo,
@@ -100,7 +101,9 @@ export async function runFindStrings(
 
   let allProjects: SearchProjectsItem[];
   try {
+    logger.debug(`Получение списка репозиториев (repoNameFilter='${resolved.repoNameFilter ?? ''}')…`);
     allProjects = await getAllProjects(resolved.repoNameFilter);
+    logger.debug(`Список репозиториев получен: ${allProjects.length}`);
   } finally {
     clearInterval(fetchReposTimer);
     progress.clear();
@@ -151,7 +154,8 @@ export async function runFindStrings(
   // closure). Initialised to the repo count this run processes — mirrors
   // findStrings' `total`, computed from the resolved/selected repo set.
   const doneRef = { current: 0 };
-  const totalRef = { current: selectedRepos?.length ?? repos.length };
+  const scannedCount = selectedRepos?.length ?? repos.length;
+  const totalRef = { current: scannedCount };
 
   // Single source of truth for the live frame, shared by the callbacks and the
   // spinner timer so they always draw a consistent line.
@@ -198,7 +202,9 @@ export async function runFindStrings(
 
   let results: MatchResult[];
   try {
+    logger.debug(`Начинаю поиск по ${scannedCount} репозиториям… (concurrency=${resolved.concurrency})`);
     results = await findStrings(findOpts);
+    logger.debug('Поиск завершён.');
   } finally {
     // Always stop the spinner timer — both on the normal path (where
     // `onProgress` already finished/pinned the last frame via `progress.finish`)

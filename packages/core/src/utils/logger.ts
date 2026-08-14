@@ -34,8 +34,17 @@ export function configureLogger(options: LoggerOptions): void {
   enabled = options.enabled;
 }
 
+/** Whether debug logging is currently enabled (so callers can skip extra work). */
+export function isLoggingEnabled(): boolean {
+  return enabled;
+}
+
 function write(line: string): void {
-  process.stderr.write(`${line}\n`);
+  // TTY: the progress spinner keeps an active line without a trailing newline
+  // (it rewrites in place with \r). Clear that line first so debug/error lines
+  // don't interleave with the spinner — each log gets its own clean line.
+  const clear = process.stderr.isTTY ? '\r\x1b[2K' : '';
+  process.stderr.write(`${clear}${line}\n`);
 }
 
 export const logger = {
