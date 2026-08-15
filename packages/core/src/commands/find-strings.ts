@@ -379,6 +379,25 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
         )),
   );
 
+  // Приоритизация по размеру: мелкие репо обрабатываем первыми, гигантов
+  // оставляем на хвост очереди, чтобы они не удерживали слоты p-limit,
+  // пока мелкие ещё работают (эмпирически: ~25–30с экономии wall-time на
+  // 100+ репо, см. метрики metrics-1.ndjson).
+  //
+  // repository_size === undefined или null трактуем как 0 (неизвестный
+  // размер не откладываем — иначе такие репо могут «спрятаться» за
+  // гигантами в хвосте; мы их всё равно обработаем, пусть идут первыми).
+  //
+  // Array.prototype.sort в V8 — стабильный (Timsort): для равных размеров
+  // сохраняется порядок от API GitLab (`order_by: 'name', sort: 'asc'`).
+  projects.sort((a, b) => {
+    const sa = a.statistics?.repository_size ?? 0;
+    const sb = b.statistics?.repository_size ?? 0;
+    return sa - sb;
+  });
+  if (projects.every((p) => p.statistics?.repository_size == null))
+    logger.warn('нет statistics.repository_size (токен без прав Reporter+?): приоритизация по размеру не сработает');
+
   const total = projects.length;
   let done = 0;
   const limit = pLimit(opts.concurrency ?? 5);

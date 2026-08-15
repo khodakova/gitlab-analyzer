@@ -8,7 +8,8 @@ import { logger } from './logger.ts';
 async function getProjectsByNamespaceQuery(params: { search?: string | null, page?: number, perPage?: number }) {
   const query = getQueryString({
     search: params?.search || '',
-    simple: true,
+    simple: false,
+    statistics: true,
     search_namespaces: true,
     page: params.page,
     per_page: params?.perPage || 100,

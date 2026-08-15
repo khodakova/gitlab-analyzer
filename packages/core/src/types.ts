@@ -39,6 +39,20 @@ export type SearchProjectsItem = {
     avatar_url: unknown,
     web_url: string | null,
   }
+
+  /**
+   * Блок статистики проекта, как возвращает GitLab API при
+   * `simple=false&statistics=true`. Доступен только при наличии
+   * прав Reporter+ у токена; null — если прав нет, undefined —
+   * если поле отсутствует в ответе (старые API, фикстуры).
+   *
+   * repository_size — объём git-истории в байтах (используется в
+   * findStrings для приоритизации очереди: мелкие первыми,
+   * гиганты последними). Тип number | null — как в getProjectRepositorySize.
+   */
+  statistics?: {
+    repository_size?: number | null;
+  } | null;
 }
 
 export type GetRepositoryFile = {

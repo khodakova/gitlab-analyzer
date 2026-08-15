@@ -72,6 +72,7 @@ function project(overrides: Partial<SearchProjectsItem> & { id: number; name: st
       avatar_url: null,
       web_url: null,
     },
+    ...(overrides.statistics !== undefined ? { statistics: overrides.statistics } : {}),
   };
 }
 
@@ -893,6 +894,132 @@ describe('findStrings', () => {
         'results',
         'resultsLength',
       ]);
+    });
+  });
+
+  describe('case 16: size prioritization (sort by statistics.repository_size)', () => {
+    // Every order test uses concurrency: 1 — otherwise callbacks fire in
+    // *completion* order, not *enqueue* order, and the test would be flaky.
+    const archiveP = makeZip({ '/src/x.ts': 'X' });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      configureLogger({ enabled: false });
+    });
+
+    it('processes repos in ASC order by repository_size (unknown-first)', async () => {
+      const archive = await archiveP;
+
+      const order: string[] = [];
+      getProjectArchiveMock.mockImplementation(async (_id, opts) => {
+        order.push(opts?.projectName ?? '');
+        return archive;
+      });
+
+      const results = await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        concurrency: 1,
+        projects: [
+          project({ id: 1, name: 'unknown' }),
+          project({ id: 2, name: 'giant', statistics: { repository_size: 999_999 } }),
+          project({ id: 3, name: 'small', statistics: { repository_size: 10 } }),
+          project({ id: 4, name: 'medium', statistics: { repository_size: 500 } }),
+        ],
+      });
+
+      // unknown → 0, then ASC by size.
+      expect(order).toEqual(['unknown', 'small', 'medium', 'giant']);
+      expect(results.map((r) => r.projectName)).toEqual(['unknown', 'small', 'medium', 'giant']);
+    });
+
+    it('all-undefined statistics — order unchanged, no crash', async () => {
+      const archive = await archiveP;
+      const order: string[] = [];
+      getProjectArchiveMock.mockImplementation(async (_id, opts) => {
+        order.push(opts?.projectName ?? '');
+        return archive;
+      });
+
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        concurrency: 1,
+        projects: [
+          project({ id: 1, name: 'a' }),
+          project({ id: 2, name: 'b' }),
+          project({ id: 3, name: 'c' }),
+        ],
+      });
+
+      // Stable sort over equal (0) keys → caller order preserved.
+      expect(order).toEqual(['a', 'b', 'c']);
+    });
+
+    it('equal sizes keep the API-provided order (Timsort pin)', async () => {
+      const archive = await archiveP;
+      const order: string[] = [];
+      getProjectArchiveMock.mockImplementation(async (_id, opts) => {
+        order.push(opts?.projectName ?? '');
+        return archive;
+      });
+
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        concurrency: 1,
+        projects: [
+          project({ id: 1, name: 'first', statistics: { repository_size: 100 } }),
+          project({ id: 2, name: 'second', statistics: { repository_size: 100 } }),
+        ],
+      });
+
+      expect(order).toEqual(['first', 'second']);
+    });
+
+    it('string/NaN repository_size does not break sorting (defensive)', async () => {
+      const archive = await archiveP;
+      const order: string[] = [];
+      getProjectArchiveMock.mockImplementation(async (_id, opts) => {
+        order.push(opts?.projectName ?? '');
+        return archive;
+      });
+
+      const nanish = project({ id: 1, name: 'nan' }) as SearchProjectsItem & { statistics: { repository_size: number } };
+      nanish.statistics = { repository_size: NaN };
+      const strish = project({ id: 2, name: 'str', statistics: { repository_size: '0' as unknown as number } });
+
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        concurrency: 1,
+        projects: [nanish, strish, project({ id: 3, name: 'clean' })],
+      });
+
+      // No exception; all three repos still processed.
+      expect(order.sort()).toEqual(['clean', 'nan', 'str']);
+    });
+
+    it('onProgress callback order follows the sorted order', async () => {
+      const archive = await archiveP;
+      getProjectArchiveMock.mockImplementation(async () => archive);
+
+      const names: string[] = [];
+      await findStrings({
+        searchStrings: ['X'],
+        branch: 'main',
+        concurrency: 1,
+        projects: [
+          project({ id: 1, name: 'big', statistics: { repository_size: 900 } }),
+          project({ id: 2, name: 'small', statistics: { repository_size: 5 } }),
+          project({ id: 3, name: 'mid', statistics: { repository_size: 50 } }),
+        ],
+        onProgress: (_done, _total, repo) => {
+          names.push(repo);
+        },
+      });
+
+      expect(names).toEqual(['small', 'mid', 'big']);
     });
   });
 });

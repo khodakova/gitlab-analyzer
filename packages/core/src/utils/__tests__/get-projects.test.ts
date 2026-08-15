@@ -61,4 +61,17 @@ describe('getAllProjects metrics accumulator', () => {
     const projects = await getAllProjects('x');
     expect(projects).toHaveLength(1);
   });
+
+  it('builds the query with simple=false and statistics=true (size prioritization)', async () => {
+    getSpy.mockResolvedValue(pageResponse([{ id: 1, name: 'p1' }], 1));
+
+    await getAllProjects(null);
+
+    const url = getSpy.mock.calls[0][0] as string;
+    expect(url).toMatch(/simple=false/);
+    expect(url).toMatch(/statistics=true/);
+    // `simple: true` must have been dropped — otherwise GitLab truncates the
+    // fields and omits the `statistics` block entirely.
+    expect(url).not.toMatch(/simple=true/);
+  });
 });
