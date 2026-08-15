@@ -81,7 +81,7 @@ gitlab-analyzer find-strings [options] <strings...>
 | `-o, --output <path>` | Where to write the report; omit for an auto-generated name | auto-name |
 | `-c, --concurrency <n>` | Max parallel archive-fetch + zip-parse tasks | `5` |
 | `--metrics-file <path>` | Write performance metrics (NDJSON: `run`/`repo`/`summary`) to a file. Diagnostic only — does not affect the report | — |
-| `--interactive` | Pick repos manually before searching (space toggles, Enter confirms) | off |
+| `--interactive` | Pick repos manually before searching (all pre-selected; shows up to 50, ↑/↓ scrolls, space toggles, Enter confirms) | off |
 | `--enable-logs` | Verbose debug/API logging (auto-enabled with `--interactive`) | off |
 | `-h, --help` | Show help | — |
 
@@ -113,7 +113,6 @@ gitlab-analyzer find-strings 'UPDATE' --stdout | jq '.metadata.branch'
 
 # Interactive repo selection
 gitlab-analyzer find-strings 'release-it' --interactive
-
 # Without installing — via npx
 npx gitlab-analyzer find-strings 'console.log' 'debugger'
 ```

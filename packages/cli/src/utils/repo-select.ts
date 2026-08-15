@@ -15,7 +15,11 @@ type MultiselectOptions = {
   type: 'multiselect';
   name: string;
   message: string;
-  choices: Array<{ name: string; enabled: boolean }>;
+  choices: Array<{ name: string }>;
+  /** Names of choices to pre-select. Passed as an array so enquirer 2.4.1
+   *  re-enables every matching choice on reset (per-choice `enabled: true`
+   *  is silently wiped by enquirer's `reset()` — see types/array.js). */
+  initial: string[];
   limit: number;
 };
 
@@ -46,12 +50,14 @@ export const enquirerRepoSelect: RepoSelectPrompt = async (repos) => {
     type: 'multiselect',
     name: 'repos',
     message:
-      'Выберите репозитории, по которым будет выполнен поиск (пробел — отметить/снять, Enter — подтвердить)',
+      'Выберите репозитории, по которым будет выполнен поиск (↑/↓ — прокрутка, пробел — отметить/снять, Enter — подтвердить)',
     choices: repos.map((repo) => ({
       name: repo.name,
-      enabled: true,
     })),
-    limit: 10,
+    // All repos are pre-selected by default. enquirer ignores per-choice
+    // `enabled: true` (its reset() wipes it), so pre-select via `initial`.
+    initial: repos.map((repo) => repo.name),
+    limit: 50,
   };
   const answers = await Enquirer.prompt<{ repos: string[] }>(options);
 

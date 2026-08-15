@@ -64,7 +64,7 @@ export function buildProgram(): Command {
     .option('--include-tests', 'Include *.test.* files in the search')
     .option(
       '--interactive',
-      'Let you choose which repositories to search (space toggles a repo, Enter confirms); empty selection cancels',
+      'Let you choose which repositories to search (all pre-selected; ↑/↓ scrolls, space toggles, Enter confirms); empty selection cancels',
     )
     .option(
       '--enable-logs',
