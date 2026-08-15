@@ -290,20 +290,24 @@ export async function findStrInZip(
 
       const content = await file.async('text');
 
+      // Single pass over the content: compute the matching strings ONCE and
+      // reuse the result for metrics and for building the result record,
+      // instead of re-scanning the content up to 3 times per file.
+      const matched = searchStrings.filter((s) => content.includes(s));
+
       // Aggregate per-file counters only AFTER the content is decoded (need
       // `content.length`). textLength is UTF-16 code units, not byte count.
       if (metrics) {
         metrics.filesScanned++;
         metrics.textLength += content.length;
-        if (searchStrings.some((s) => content.includes(s))) {
+        if (matched.length > 0) {
           metrics.filesMatched++;
         }
       }
 
-      if (searchStrings.some((s) => content.includes(s))) {
-        const matches = searchStrings.filter((s) => content.includes(s));
+      if (matched.length > 0) {
         const lines = content.split('\n');
-        results.push({ filename, matches, content: lines });
+        results.push({ filename, matches: matched, content: lines });
       }
     }
     scanMs = Date.now() - tScan;
