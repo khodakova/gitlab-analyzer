@@ -4,7 +4,7 @@
 ---
 
 Add search performance metrics. Core exposes a new `onRepoTiming(timing)`
-option on `findStrings` (per-repo download/unzip/scan timings plus aggregated
+option on `findMatches` (per-repo download/unzip/scan timings plus aggregated
 file counters, fired for success and failure) and optional mutable `metrics?`
 accumulators on `getProjectArchive`/`findStrInZip`/`getAllProjects` (re-exported
 from `@gitlab-analyzer/core/internal`, not the public API). The CLI prints a

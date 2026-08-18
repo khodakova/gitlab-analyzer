@@ -2,13 +2,13 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { green, yellow } from 'colorette';
 import {
-  findStrings,
+  findMatches,
   loadConfig,
   configureLogger,
   logger,
   flushLogs,
   formatDuration,
-  type FindStringsOptions,
+  type FindMatchesOptions,
   type MatchResult,
   type RepoInfo,
 } from '@gitlab-analyzer/core';
@@ -23,7 +23,7 @@ import { repoSelect } from '../utils/repo-select.ts';
 import { progress, report, renderProgressFrame } from '../utils/progress.ts';
 import {
   resolveOptions,
-  type FindStringsCliOptions,
+  type FindMatchesCliOptions,
 } from '../utils/options.ts';
 import {
   assertFormatPathConsistency,
@@ -49,9 +49,9 @@ import {
  *   any source, or when `--format` conflicts with an explicit `--output`
  *   path extension.
  */
-export async function runFindStrings(
+export async function runFindMatches(
   strings: string[],
-  opts: FindStringsCliOptions,
+  opts: FindMatchesCliOptions,
 ): Promise<{ report: Report; outputPath: string | undefined }> {
   // Run-scope timing anchor. Must be the FIRST statement so totalWallMs
   // captures the whole run (config load, list fetch, search, report write).
@@ -64,7 +64,7 @@ export async function runFindStrings(
       .map((e) => `  - ${e.field}: ${e.message}`)
       .join('\n');
     throw new Error(
-      `Cannot run find-strings — missing required options:\n${lines}`,
+      `Cannot run find-matches — missing required options:\n${lines}`,
     );
   }
 
@@ -90,11 +90,11 @@ export async function runFindStrings(
   axiosInstance.defaults.baseURL = resolved.gitlabUrl;
 
   // Resolve the repository set (already filtered by excludeRepos — this must
-  // mirror findStrings' filter so the picker / printed list matches what will
-  // actually be searched). This list is ALSO handed to `findStrings` via
+  // mirror findMatches' filter so the picker / printed list matches what will
+  // actually be searched). This list is ALSO handed to `findMatches` via
   // `projects` so it does not re-fetch the project list (avoiding a duplicate
   // API call and a duplicated "Найдено репозиториев" debug line). Kept pure:
-  // findStrings still does its own exclude/selected filtering on top.
+  // findMatches still does its own exclude/selected filtering on top.
   //
   // Fetching the repo list can take a while — `getAllProjects` walks every
   // page of the GitLab projects API before any per-repo work begins, and
@@ -108,7 +108,7 @@ export async function runFindStrings(
   }, 150);
 
   // Run-scope metrics accumulator (SearchMetrics, from core/internal). Filled
-  // by findStrings (list + per-repo) and by this CLI (run-scope heap growth).
+  // by findMatches (list + per-repo) and by this CLI (run-scope heap growth).
   // Memory is sampled once before the list fetch and once at the end — the
   // difference (totalHeapGrowthBytes) may be negative after GC.
   const metrics: SearchMetrics = {
@@ -131,7 +131,7 @@ export async function runFindStrings(
   /**
    * Write the `--metrics-file` NDJSON (run / one-repo-per-line / summary) and
    * print the stderr metrics summary. Call on every normal exit of
-   * `runFindStrings`: `complete` (after the report is written), `cancel`
+   * `runFindMatches`: `complete` (after the report is written), `cancel`
    * (interactive empty selection) and `no-repos` (headless zero-repo guard).
    * A write error is a warning, never fatal — the report is already written.
    */
@@ -265,7 +265,7 @@ export async function runFindStrings(
 
   // Per-repo error map, fed by onProgress's new `error` argument. Each repo is
   // keyed by name so we can correlate the error with the matching report entry
-  // and the search results returned by findStrings (which omits errored repos).
+  // and the search results returned by findMatches (which omits errored repos).
   const repoErrors = new Map<string, string>();
 
   // Most recently *started* repo, fed by the `onRepoStart` hook. Analysis is
@@ -278,7 +278,7 @@ export async function runFindStrings(
   // given repo incrementing `done`) can render `Обработано N из M` using the
   // latest values reported by `onProgress` (whose `done`/`total` live inside its
   // closure). Initialised to the repo count this run processes — mirrors
-  // findStrings' `total`, computed from the resolved/selected repo set.
+  // findMatches' `total`, computed from the resolved/selected repo set.
   const doneRef = { current: 0 };
   const scannedCount = selectedRepos?.length ?? repos.length;
   const totalRef = { current: scannedCount };
@@ -294,7 +294,7 @@ export async function runFindStrings(
     progress.spin(currentFrame());
   }, 150);
 
-  const findOpts: FindStringsOptions = {
+  const findOpts: FindMatchesOptions = {
     searchStrings: strings,
     branch: resolved.branch,
     repoNameFilter: resolved.repoNameFilter,
@@ -330,7 +330,7 @@ export async function runFindStrings(
   let results: MatchResult[];
   try {
     logger.info(`Начинаю поиск по ${scannedCount} репозиториям… (concurrency=${resolved.concurrency})`);
-    results = await findStrings(findOpts);
+    results = await findMatches(findOpts);
     logger.success('Поиск завершён.');
   } finally {
     // Always stop the spinner timer — both on the normal path (where

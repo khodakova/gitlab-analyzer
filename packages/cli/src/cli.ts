@@ -4,8 +4,8 @@
 import { Command, Option, CommanderError } from 'commander';
 import { fileURLToPath } from 'node:url';
 import { logger, flushLogs } from '@gitlab-analyzer/core';
-import { runFindStrings } from './commands/find-strings.ts';
-import type { FindStringsCliOptions } from './utils/options.ts';
+import { runFindMatches } from './commands/find-matches.ts';
+import type { FindMatchesCliOptions } from './utils/options.ts';
 
 // The thin CLI layer only wires commander to the command implementations.
 // All option resolution, repo fetching, search orchestration, report
@@ -17,7 +17,7 @@ import type { FindStringsCliOptions } from './utils/options.ts';
  * `.exitOverride().parseAsync(argv)` and capture errors / output without
  * touching real `process.exit` or `process.stderr`.
  *
- * Note: `exitOverride()` is called BEFORE adding the `find-strings`
+ * Note: `exitOverride()` is called BEFORE adding the `find-matches`
  * subcommand so that the subcommand inherits the override callback via
  * `copyInheritedSettings`. If you call `program.exitOverride()` *after*
  * `buildProgram()` returns, the subcommand will still call `process.exit`
@@ -39,7 +39,7 @@ export function buildProgram(): Command {
     .version('0.1.0');
 
   program
-    .command('find-strings')
+    .command('find-matches')
     .description(
       'Search for specific strings across all GitLab projects reachable from the configured instance',
     )
@@ -90,9 +90,9 @@ export function buildProgram(): Command {
       'Maximum number of parallel archive-fetch + zip-parse tasks',
       (val: string) => parseInt(val, 10),
     )
-    .action(async (strings: string[], opts: FindStringsCliOptions) => {
+    .action(async (strings: string[], opts: FindMatchesCliOptions) => {
       try {
-        await runFindStrings(strings, opts);
+        await runFindMatches(strings, opts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error(`Error: ${message}`);
@@ -120,7 +120,7 @@ export function buildProgram(): Command {
  * Internally this enables commander's `exitOverride()` so the function can
  * catch and translate usage errors instead of commander calling
  * `process.exit` directly. Tests should drive {@link buildProgram} (or
- * `runFindStrings`) directly when they want full control over commander's
+ * `runFindMatches`) directly when they want full control over commander's
  * error machinery.
  *
  * @param argv - Optional override for `process.argv`. Defaults to the
@@ -165,7 +165,7 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
  * so commander never sees the argv and nothing happens.
  *
  * When the module is *imported* instead of executed (Vitest tests, downstream
- * consumers pulling in `runCli` / `buildProgram` / `runFindStrings`), the
+ * consumers pulling in `runCli` / `buildProgram` / `runFindMatches`), the
  * guard is false and no CLI startup happens — so the public surface stays
  * side-effect-free for library use.
  *

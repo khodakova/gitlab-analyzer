@@ -10,12 +10,12 @@ function mb(bytes: number): string {
 }
 
 /**
- * Input options for {@link findStrings}.
+ * Input options for {@link findMatches}.
  *
  * Only `searchStrings` and `branch` are required; everything else falls back
  * to a sensible default documented per field.
  */
-export type FindStringsOptions = {
+export type FindMatchesOptions = {
   /**
    * Strings to search for. A file is considered a match if its content
    * includes ANY of these substrings (logical OR). The `matches` array on
@@ -104,7 +104,7 @@ export type FindStringsOptions = {
   onRepoStart?: (repo: string) => void;
 
   /**
-   * Optional pre-loaded project list. When provided, `findStrings` does NOT
+   * Optional pre-loaded project list. When provided, `findMatches` does NOT
    * fetch the project list from GitLab again (skips `getAllProjects`);
    * `repoNameFilter` is then ignored for the fetch (it is assumed to already
    * be applied to `projects`). Filtering by `excludeRepos` and `selectedRepos`
@@ -119,7 +119,7 @@ export type FindStringsOptions = {
    * metrics (download/unzip/scan durations, aggregated file stats, and the
    * `error` message for a repo whose archive could not be fetched). This is a
    * separate channel from the `MatchResult` result — it does NOT alter the
-   * returned array or the report shape. `findStrings` remains pure (it only
+   * returned array or the report shape. `findMatches` remains pure (it only
    * calls the callback, it never writes output itself).
    * @param timing - Per-repo performance metrics for the repository that just
    *   finished processing.
@@ -128,7 +128,7 @@ export type FindStringsOptions = {
 
   /**
    * Optional shared mutable accumulator for run-scope search metrics. When
-   * provided, `findStrings` writes list metrics (into `metrics.list`) and
+   * provided, `findMatches` writes list metrics (into `metrics.list`) and
    * appends one entry to `metrics.perRepo` for each processed repository (via
    * {@link onRepoTiming}). Intended for CLIs/mcp servers that want the whole
    * run's metrics in one place; ordinary library callers can ignore it and use
@@ -190,7 +190,7 @@ export type MatchResult = {
 type FileMatch = MatchResult['results'][number];
 
 /**
- * Per-repository performance metrics, emitted via {@link FindStringsOptions.onRepoTiming}.
+ * Per-repository performance metrics, emitted via {@link FindMatchesOptions.onRepoTiming}.
  *
  * Breakdown is per phase: `downloadMs` (archive fetch), `unzipMs` (in-memory
  * unzip), `scanMs` (the file-content search loop). `totalMs` is the whole repo
@@ -219,7 +219,7 @@ export type RepoTiming = {
 
 /**
  * Run-scope accumulator for search metrics. A single flat mutable record that
- * `findStrings` fills in place as it runs — `list` from the project-list fetch,
+ * `findMatches` fills in place as it runs — `list` from the project-list fetch,
  * `perRepo` appended per processed repo, `summary` for run-scope heap growth.
  *
  * This is an internal (NOT public `index.ts`) type: the CLI consumes it via
@@ -347,7 +347,7 @@ export async function findStrInZip(
  *
  * @example
  * ```ts
- * const results = await findStrings({
+ * const results = await findMatches({
  *   searchStrings: ['my-secret', 'TODO'],
  *   branch: 'develop',
  *   concurrency: 5,
@@ -361,7 +361,7 @@ export async function findStrInZip(
  * console.log(`Found ${totalMatches} matches across ${results.length} repos`);
  * ```
  */
-export async function findStrings(opts: FindStringsOptions): Promise<MatchResult[]> {
+export async function findMatches(opts: FindMatchesOptions): Promise<MatchResult[]> {
   const searchStrings = opts.searchStrings;
   const branch = opts.branch;
   const pathFilter = opts.pathFilter ?? '/src/';

@@ -2,27 +2,27 @@ import { describe, it, expect } from 'vitest';
 import * as indexModule from '../../index.ts';
 
 describe('index > public API surface', () => {
-  it('re-exports the findStrings function', () => {
-    expect(typeof indexModule.findStrings).toBe('function');
+  it('re-exports the findMatches function', () => {
+    expect(typeof indexModule.findMatches).toBe('function');
   });
 
   it('re-exports the loadConfig function', () => {
     expect(typeof indexModule.loadConfig).toBe('function');
   });
 
-  it('exposes the MatchResult type via findStrings return type', () => {
+  it('exposes the MatchResult type via findMatches return type', () => {
     // Type-only check: invoking the type-level helpers at compile time is
     // enough — no need to actually await the runtime call. Assigning the
     // inferred return type proves MatchResult re-exports compile.
-    type _MatchResult = Awaited<ReturnType<typeof indexModule.findStrings>>[number];
+    type _MatchResult = Awaited<ReturnType<typeof indexModule.findMatches>>[number];
     const typedLocal: _MatchResult | undefined = undefined;
     expect(typedLocal).toBeUndefined();
   });
 
-  it('exposes the FindStringsOptions type via findStrings parameter type', () => {
+  it('exposes the FindMatchesOptions type via findMatches parameter type', () => {
     // Type-only check: a typed declaration with the optional fields proves
-    // the FindStringsOptions export is in scope. No runtime invocation.
-    type _Options = indexModule.FindStringsOptions;
+    // the FindMatchesOptions export is in scope. No runtime invocation.
+    type _Options = indexModule.FindMatchesOptions;
     const typedLocal: _Options = {
       searchStrings: ['a', 'b'],
       branch: 'develop',
@@ -43,7 +43,7 @@ describe('index > public API surface', () => {
     expect(mod.GitlabAnalyzerConfig).toBeUndefined();
   });
 
-  it('exposes the public runtime values (findStrings, loadConfig, logger, coverage sentinel)', () => {
+  it('exposes the public runtime values (findMatches, loadConfig, logger, coverage sentinel)', () => {
     // The sentinel `__reExportSentinel` exists purely to anchor v8 coverage
     // on this pure-re-export file; assert it is present so future
     // refactors do not silently drop it.
@@ -51,7 +51,7 @@ describe('index > public API surface', () => {
     expect(exportedNames).toEqual([
       '__reExportSentinel',
       'configureLogger',
-      'findStrings',
+      'findMatches',
       'flushLogs',
       'formatDuration',
       'loadConfig',

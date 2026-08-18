@@ -29,21 +29,21 @@ describe('report > resolveOutputPath', () => {
   it('generates an auto json name when no --output is given', () => {
     mocks.existsSync.mockReturnValue(false);
     expect(resolveOutputPath(undefined, 'json', '2026-08-13-1536')).toBe(
-      'find-strings-results-2026-08-13-1536.json',
+      'find-matches-results-2026-08-13-1536.json',
     );
   });
 
   it('generates an auto txt name for --format txt', () => {
     mocks.existsSync.mockReturnValue(false);
     expect(resolveOutputPath(undefined, 'txt', '2026-08-13-1536')).toBe(
-      'find-strings-results-2026-08-13-1536.txt',
+      'find-matches-results-2026-08-13-1536.txt',
     );
   });
 
   it('versions the auto name with -1, -2 when the base name exists', () => {
-    const base = 'find-strings-results-2026-08-13-1536.json';
-    const v1 = 'find-strings-results-2026-08-13-1536-1.json';
-    const v2 = 'find-strings-results-2026-08-13-1536-2.json';
+    const base = 'find-matches-results-2026-08-13-1536.json';
+    const v1 = 'find-matches-results-2026-08-13-1536-1.json';
+    const v2 = 'find-matches-results-2026-08-13-1536-2.json';
     mocks.existsSync
       .mockImplementation((p: string) => p === base || p === v1);
     expect(resolveOutputPath(undefined, 'json', '2026-08-13-1536')).toBe(v2);

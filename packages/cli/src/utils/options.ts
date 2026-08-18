@@ -1,13 +1,13 @@
 import type { GitlabAnalyzerConfig } from '@gitlab-analyzer/core/internal';
 
 /**
- * CLI options for the `find-strings` subcommand. Produced by commander and
- * passed into `runFindStrings`.
+ * CLI options for the `find-matches` subcommand. Produced by commander and
+ * passed into `runFindMatches`.
  *
  * All fields are optional at the type level because commander only assigns
  * them when the corresponding flag is present. {@link resolveOptions}
  * fills in config-file and built-in defaults before building the
- * `ResolvedFindStringsOptions` handed to the library.
+ * `ResolvedFindMatchesOptions` handed to the library.
  *
  * Resolution precedence (highest wins):
  *
@@ -15,11 +15,11 @@ import type { GitlabAnalyzerConfig } from '@gitlab-analyzer/core/internal';
  *   2. Environment variable (`PRIVATE_TOKEN`, `GITLAB_URL` — the latter
  *      typically populated by `.env` via dotenv)
  *   3. `gitlab-analyzer.json` config file (`defaults.*`,
- *      `commands.find-strings.*`, `gitlab.url`)
+ *      `commands.find-matches.*`, `gitlab.url`)
  *   4. Built-in default (`'develop'` for branch, `/src/` for path filter,
  *      `false` for includeTests, `5` for concurrency, etc.)
  */
-export type FindStringsCliOptions = {
+export type FindMatchesCliOptions = {
   repoFilter?: string;
   exclude?: string[];
   branch?: string;
@@ -36,10 +36,10 @@ export type FindStringsCliOptions = {
 };
 
 /**
- * Fully resolved `find-strings` options — every required field is present
+ * Fully resolved `find-matches` options — every required field is present
  * (or the `errors` array is non-empty in {@link resolveOptions}'s return).
  */
-export type ResolvedFindStringsOptions = {
+export type ResolvedFindMatchesOptions = {
   /** Base URL of the GitLab instance (from `GITLAB_URL` env or `gitlab.url` config). */
   gitlabUrl: string;
   /** Branch to scan. */
@@ -79,11 +79,11 @@ export type ResolveError = {
 };
 
 export type ResolveResult =
-  | { ok: true; resolved: ResolvedFindStringsOptions }
+  | { ok: true; resolved: ResolvedFindMatchesOptions }
   | { ok: false; errors: ResolveError[] };
 
 /**
- * Resolve every `find-strings` option using the documented precedence
+ * Resolve every `find-matches` option using the documented precedence
  * (CLI → env → config → built-in default) and collect ALL missing-required
  * fields into a single structured error list.
  *
@@ -101,7 +101,7 @@ export type ResolveResult =
  */
 export function resolveOptions(
   strings: readonly string[],
-  cliOpts: FindStringsCliOptions,
+  cliOpts: FindMatchesCliOptions,
   config: GitlabAnalyzerConfig,
 ): ResolveResult {
   const errors: ResolveError[] = [];
@@ -134,7 +134,7 @@ export function resolveOptions(
   }
 
   // Optional/derived with fallback chain: CLI > env > config > built-in default.
-  const cmdDefaults = config.commands?.['find-strings'];
+  const cmdDefaults = config.commands?.['find-matches'];
 
   // `enableLogs` — CLI flag > ENABLE_LOGS env > config.defaults.enableLogs >
   // built-in default (false). ENABLE_LOGS accepts '1', 'true', 'yes', 'on' as
@@ -152,7 +152,7 @@ export function resolveOptions(
     config.defaults?.enableLogs ??
     false;
 
-  const resolved: ResolvedFindStringsOptions = {
+  const resolved: ResolvedFindMatchesOptions = {
     gitlabUrl: gitlabUrl as string, // safe: gated above; errors[] is non-empty if missing
     branch: cliOpts.branch ?? config.defaults?.branch ?? 'develop',
     repoNameFilter:

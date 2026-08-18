@@ -8,7 +8,7 @@ import JSZip from 'jszip';
  * hoisted by Vitest to run before any imports.
  *
  * Paths use `../../` because this file lives at
- * `src/commands/__tests__/find-strings.test.ts` (one level deeper than
+ * `src/commands/__tests__/find-matches.test.ts` (one level deeper than
  * co-located would be).
  */
 const { getAllProjectsMock, getProjectArchiveMock } = vi.hoisted(() => ({
@@ -24,7 +24,7 @@ vi.mock('../../api/project-archive.ts', () => ({
   getProjectArchive: getProjectArchiveMock,
 }));
 
-import { findStrings, findStrInZip } from '../find-strings.ts';
+import { findMatches, findStrInZip } from '../find-matches.ts';
 import type { SearchProjectsItem } from '../../types.ts';
 import { configureLogger, logger, flushLogs } from '../../utils/logger.ts';
 
@@ -76,7 +76,7 @@ function project(overrides: Partial<SearchProjectsItem> & { id: number; name: st
   };
 }
 
-describe('findStrings', () => {
+describe('findMatches', () => {
   beforeEach(() => {
     getAllProjectsMock.mockReset();
     getProjectArchiveMock.mockReset();
@@ -91,7 +91,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 42, name: 'repo-a', description: 'A repo' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['my-secret'],
         branch: 'develop',
       });
@@ -125,7 +125,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['TARGET'],
         branch: 'main',
       });
@@ -143,7 +143,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         // no pathFilter → default '/src/'
@@ -163,7 +163,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['TARGET'],
         branch: 'main',
         // no includeTests → default false
@@ -181,7 +181,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['TARGET'],
         branch: 'main',
         includeTests: true,
@@ -205,7 +205,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['OK'],
         branch: 'main',
         excludeRepos: ['skip-me'],
@@ -226,7 +226,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['NEVER_PRESENT'],
         branch: 'main',
       });
@@ -249,7 +249,7 @@ describe('findStrings', () => {
       getProjectArchiveMock.mockResolvedValue(archive);
 
       const calls: Array<[number, number, string]> = [];
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         onProgress: (done, total, currentRepo) => {
@@ -278,7 +278,7 @@ describe('findStrings', () => {
       getProjectArchiveMock.mockResolvedValue(archive);
 
       const started: string[] = [];
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         onRepoStart: (repo) => {
@@ -313,7 +313,7 @@ describe('findStrings', () => {
         return archive;
       });
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 3,
@@ -341,7 +341,7 @@ describe('findStrings', () => {
         return archive;
       });
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 1,
@@ -368,7 +368,7 @@ describe('findStrings', () => {
         return archive;
       });
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         // no concurrency → default 5
@@ -391,7 +391,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
       });
@@ -416,7 +416,7 @@ describe('findStrings', () => {
       });
 
       const calls: Array<[number, number, string]> = [];
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         onProgress: (done, total, repo) => calls.push([done, total, repo]),
@@ -434,7 +434,7 @@ describe('findStrings', () => {
       // Garbage bytes — not a valid ZIP
       getProjectArchiveMock.mockResolvedValue(new ArrayBuffer(8));
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
       });
@@ -451,7 +451,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         // no repoNameFilter
@@ -467,7 +467,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         repoNameFilter: 'frontend',
@@ -484,7 +484,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'feature/special',
       });
@@ -512,7 +512,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['ALPHA', 'BETA'],
         branch: 'main',
       });
@@ -531,7 +531,7 @@ describe('findStrings', () => {
 
       // No onProgress in opts → must not throw
       await expect(
-        findStrings({
+        findMatches({
           searchStrings: ['X'],
           branch: 'main',
         }),
@@ -550,7 +550,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         selectedRepos: [
@@ -573,7 +573,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         excludeRepos: ['excluded'],
@@ -591,7 +591,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(null);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         selectedRepos: [{ id: 999, name: 'does-not-exist' }],
@@ -610,7 +610,7 @@ describe('findStrings', () => {
       ]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         // no selectedRepos
@@ -626,7 +626,7 @@ describe('findStrings', () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         projects: [project({ id: 1, name: 'preloaded', description: 'Desc' })],
@@ -645,7 +645,7 @@ describe('findStrings', () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         repoNameFilter: 'frontend',
@@ -659,7 +659,7 @@ describe('findStrings', () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         projects: [
@@ -687,7 +687,7 @@ describe('findStrings', () => {
       });
 
       const calls: Array<[number, number, string, string | undefined]> = [];
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         onProgress: (done, total, repo, error) => {
@@ -725,7 +725,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-ok' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
 
       expect(collect()).toContain('✓ Готово: repo-ok (1 файл(ов) с совпадениями)');
@@ -735,7 +735,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-bad' })]);
       getProjectArchiveMock.mockRejectedValue(new Error('Request failed with status code 404'));
 
-      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
 
       expect(collect()).toContain('⚠ Архив не получен: repo-bad (');
@@ -747,14 +747,14 @@ describe('findStrings', () => {
       getProjectArchiveMock.mockResolvedValue(archive);
 
       // disabled: no [debug] line
-      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
       expect(collect()).not.toContain('[debug]');
 
       // enabled: [debug] «Скачивание архива…» appears
       stderrSpy.mockClear();
       configureLogger({ enabled: true });
-      await findStrings({ searchStrings: ['X'], branch: 'main' });
+      await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
       expect(collect()).toContain('[debug] Скачивание архива: repo-dbg (id=1, branch=main)…');
     });
@@ -817,7 +817,7 @@ describe('findStrings', () => {
       });
 
       const timings: Array<{ name: string; totalMs: number; phases: number }> = [];
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         onRepoTiming: (t) => {
@@ -838,8 +838,8 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 5, name: 'broken' })]);
       getProjectArchiveMock.mockRejectedValue(new Error('превышен таймаут'));
 
-      let timing: import('../find-strings.ts').RepoTiming | undefined;
-      await findStrings({
+      let timing: import('../find-matches.ts').RepoTiming | undefined;
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         onRepoTiming: (t) => { timing = t; },
@@ -865,7 +865,7 @@ describe('findStrings', () => {
 
       const metrics = { list: { listMs: 0, pagesFetched: 0, reposFound: 0 }, perRepo: [] as never[], summary: {} };
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         metrics: metrics as never,
@@ -885,7 +885,7 @@ describe('findStrings', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      const results = await findStrings({ searchStrings: ['X'], branch: 'main' });
+      const results = await findMatches({ searchStrings: ['X'], branch: 'main' });
       expect(results).toHaveLength(1);
       expect(Object.keys(results[0]).sort()).toEqual([
         'projectDescription',
@@ -916,7 +916,7 @@ describe('findStrings', () => {
         return archive;
       });
 
-      const results = await findStrings({
+      const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 1,
@@ -941,7 +941,7 @@ describe('findStrings', () => {
         return archive;
       });
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 1,
@@ -964,7 +964,7 @@ describe('findStrings', () => {
         return archive;
       });
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 1,
@@ -989,7 +989,7 @@ describe('findStrings', () => {
       nanish.statistics = { repository_size: NaN };
       const strish = project({ id: 2, name: 'str', statistics: { repository_size: '0' as unknown as number } });
 
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 1,
@@ -1005,7 +1005,7 @@ describe('findStrings', () => {
       getProjectArchiveMock.mockImplementation(async () => archive);
 
       const names: string[] = [];
-      await findStrings({
+      await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         concurrency: 1,

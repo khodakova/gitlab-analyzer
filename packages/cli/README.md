@@ -30,13 +30,13 @@ After a global install the `gitlab-analyzer` binary is on your `PATH`.
 No global install needed. `npx` pulls the package on the fly:
 
 ```bash
-npx gitlab-analyzer find-strings 'console.log' 'debugger'
+npx gitlab-analyzer find-matches 'console.log' 'debugger'
 ```
 
 For a stable version, pin it explicitly:
 
 ```bash
-npx gitlab-analyzer@0.1.0 find-strings 'console.log'
+npx gitlab-analyzer@0.1.0 find-matches 'console.log'
 ```
 
 > `npx` re-checks/downloads the package each run unless it's cached. For heavy, repeated use install globally once.
@@ -55,17 +55,17 @@ A `.env` is enough — no config file required.
 2. Run a search:
 
    ```bash
-   gitlab-analyzer find-strings 'console.log' 'debugger'
+   gitlab-analyzer find-matches 'console.log' 'debugger'
    ```
 
-Progress (`Processed 3 of 12 · my-frontend-app`) goes to **stderr**; the report goes to `find-strings-results-<date>.json`.
+Progress (`Processed 3 of 12 · my-frontend-app`) goes to **stderr**; the report goes to `find-matches-results-<date>.json`.
 
 ---
 
-## `find-strings` — all options
+## `find-matches` — all options
 
 ```
-gitlab-analyzer find-strings [options] <strings...>
+gitlab-analyzer find-matches [options] <strings...>
 ```
 
 | Option | Description | Default |
@@ -93,55 +93,55 @@ gitlab-analyzer find-strings [options] <strings...>
 
 ```bash
 # Minimal run (requires .env)
-gitlab-analyzer find-strings 'console.log' 'debugger'
+gitlab-analyzer find-matches 'console.log' 'debugger'
 
 # Frontend repos only, skipping archives, on your branch, report to a file
-gitlab-analyzer find-strings 'TODO' 'FIXME' \
+gitlab-analyzer find-matches 'TODO' 'FIXME' \
   --repo-filter 'frontend' \
   --exclude 'archived-repo,wip-repo' \
   --branch develop \
-  -o ./results/find-strings.json
+  -o ./results/find-matches.json
 
 # Scan everything (tests + all paths) to one file
-gitlab-analyzer find-strings 'legacy-sdk' \
+gitlab-analyzer find-matches 'legacy-sdk' \
   --path-filter '/' \
   --include-tests \
   --format json -o results.json
 
 # Report straight to stdout for jq (no file written)
-gitlab-analyzer find-strings 'UPDATE' --stdout | jq '.metadata.branch'
+gitlab-analyzer find-matches 'UPDATE' --stdout | jq '.metadata.branch'
 
 # Interactive repo selection
-gitlab-analyzer find-strings 'release-it' --interactive
+gitlab-analyzer find-matches 'release-it' --interactive
 # Without installing — via npx
-npx gitlab-analyzer find-strings 'console.log' 'debugger'
+npx gitlab-analyzer find-matches 'console.log' 'debugger'
 ```
 
 **Windows (PowerShell):** line continuation uses a backtick (`` ` ``); set env vars via `$env:`.
 
 ```powershell
 # Minimal run
-gitlab-analyzer find-strings 'console.log' 'debugger'
+gitlab-analyzer find-matches 'console.log' 'debugger'
 
 # Full example — `` ` `` line breaks and a time-stamped file name
-gitlab-analyzer find-strings 'TODO' 'FIXME' `
+gitlab-analyzer find-matches 'TODO' 'FIXME' `
   --repo-filter 'frontend' `
   --exclude 'archived-repo,wip-repo' `
   --branch develop `
   -o "./results/run-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
 
 # Token set inline
-$env:PRIVATE_TOKEN="glpat-xxxx"; gitlab-analyzer find-strings 'console.log'
+$env:PRIVATE_TOKEN="glpat-xxxx"; gitlab-analyzer find-matches 'console.log'
 
 # To stdout, parsed with jq
-gitlab-analyzer find-strings 'TODO' --stdout | jq '.repositories[].projectName'
+gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
 ```
 
 **Windows (cmd):** line continuation uses `^`, env vars via `set`:
 
 ```bat
 set PRIVATE_TOKEN=glpat-xxxx
-gitlab-analyzer find-strings "console.log" "debugger" ^
+gitlab-analyzer find-matches "console.log" "debugger" ^
   --repo-filter "frontend" ^
   --branch develop ^
   -o results.json
@@ -156,7 +156,7 @@ Option resolution precedence (highest wins):
 ```
 1. CLI flag                  e.g. --branch main
 2. Environment variable      GITLAB_URL, PRIVATE_TOKEN (usually from .env)
-3. gitlab-analyzer.json      defaults.*, commands.find-strings.*, gitlab.url
+3. gitlab-analyzer.json      defaults.*, commands.find-matches.*, gitlab.url
 4. Built-in default          branch="develop", pathFilter="/src/", concurrency=5
 ```
 
@@ -173,9 +173,9 @@ A config is useful for **persistent, non-secret** values (branch, exclusions, co
     "includeTests": false
   },
   "commands": {
-    "find-strings": {
+    "find-matches": {
       "concurrency": 5,
-      "output": "./results/find-strings.json"
+      "output": "./results/find-matches.json"
     }
   }
 }
@@ -190,8 +190,8 @@ A config is useful for **persistent, non-secret** values (branch, exclusions, co
 | `defaults.pathFilter` | `"/src/"` | Substring filter for file paths |
 | `defaults.includeTests` | `false` | Include `*.test.*` |
 | `defaults.enableLogs` | `false` | Enable debug logging |
-| `commands.find-strings.concurrency` | `5` | Parallel requests |
-| `commands.find-strings.output` | — | Report path |
+| `commands.find-matches.concurrency` | `5` | Parallel requests |
+| `commands.find-matches.output` | — | Report path |
 
 ## Logging
 
@@ -222,12 +222,12 @@ search or print an empty summary.
 ## Exporting results
 
 - **`--output <path>`** — write the report to the given file.
-- **Without `--output`** — auto-name `find-strings-results-<date>.json` (or `.txt` with `--format txt`); a numeric suffix `-1`, `-2`… is appended if the name is taken.
+- **Without `--output`** — auto-name `find-matches-results-<date>.json` (or `.txt` with `--format txt`); a numeric suffix `-1`, `-2`… is appended if the name is taken.
 - **`--stdout`** — additionally write the report to stdout (for piping).
 - Progress and errors always go to **stderr**, so stdout stays clean.
 
 ```bash
-gitlab-analyzer find-strings 'TODO' --stdout | jq '.repositories[].projectName'
+gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
 ```
 
 ## Performance metrics
@@ -275,7 +275,7 @@ file is a warning on stderr, never a fatal error — the report is already writt
 
 ```bash
 gitlab-analyzer --help
-gitlab-analyzer find-strings --help
+gitlab-analyzer find-matches --help
 ```
 
 ## License

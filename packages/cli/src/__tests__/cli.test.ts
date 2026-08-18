@@ -7,7 +7,7 @@ import os from 'node:os';
 // to before the imports so the factories can reference them safely.
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  findStrings: vi.fn(),
+  findMatches: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
   repoSelect: vi.fn(),
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   existsSync: vi.fn(),
 }));
 
-// cli.ts imports findStrings + loadConfig from `@gitlab-analyzer/core` (public)
+// cli.ts imports findMatches + loadConfig from `@gitlab-analyzer/core` (public)
 // and getAllProjects from `@gitlab-analyzer/core/internal`. Mock only the
 // network-facing functions; keep the rest of the real module (logger,
 // configureLogger, axiosInstance, ProgressRenderer) so the progress/logger
@@ -24,7 +24,7 @@ vi.mock('@gitlab-analyzer/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@gitlab-analyzer/core')>();
   return {
     ...actual,
-    findStrings: mocks.findStrings,
+    findMatches: mocks.findMatches,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -74,7 +74,7 @@ const defaultConfig = () => ({
     includeTests: false,
   },
   commands: {
-    'find-strings': { concurrency: 5 },
+    'find-matches': { concurrency: 5 },
   },
 });
 
@@ -105,7 +105,7 @@ describe('cli > buildProgram', () => {
       throw new Error(`process.exit(${String(_code)})`);
     }) as never);
     mocks.loadConfig.mockReset();
-    mocks.findStrings.mockReset();
+    mocks.findMatches.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -123,7 +123,7 @@ describe('cli > buildProgram', () => {
     exitSpy.mockRestore();
   });
 
-  describe('--help on find-strings subcommand', () => {
+  describe('--help on find-matches subcommand', () => {
     it('lists every option from PLAN Section5.1', async () => {
       const program = buildProgram();
 
@@ -134,7 +134,7 @@ describe('cli > buildProgram', () => {
         .parseAsync([
           'node',
           'gitlab-analyzer',
-          'find-strings',
+          'find-matches',
           '--help',
         ])
         .catch((e: unknown) => {
@@ -165,7 +165,7 @@ describe('cli > buildProgram', () => {
         .parseAsync([
           'node',
           'gitlab-analyzer',
-          'find-strings',
+          'find-matches',
           '--help',
         ])
         .catch((e: unknown) => {
@@ -174,7 +174,7 @@ describe('cli > buildProgram', () => {
         });
 
       const out = collectWriteCalls(stdoutSpy) + collectWriteCalls(stderrSpy);
-      expect(out).toContain('find-strings');
+      expect(out).toContain('find-matches');
       expect(out).toMatch(/search/i);
     });
   });
@@ -187,7 +187,7 @@ describe('cli > buildProgram', () => {
         .parseAsync([
           'node',
           'gitlab-analyzer',
-          'find-strings',
+          'find-matches',
           '--definitely-not-a-real-flag',
         ])
         .catch((e: unknown) => e);
@@ -200,7 +200,7 @@ describe('cli > buildProgram', () => {
       const program = buildProgram();
 
       const caught = await program
-        .parseAsync(['node', 'gitlab-analyzer', 'find-strings'])
+        .parseAsync(['node', 'gitlab-analyzer', 'find-matches'])
         .catch((e: unknown) => e);
 
       expect(caught).toBeInstanceOf(CommanderError);
@@ -212,7 +212,7 @@ describe('cli > buildProgram', () => {
     it('writes a JSON file at --output containing the mocked results', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
 
-      mocks.findStrings.mockImplementation(async (opts) => {
+      mocks.findMatches.mockImplementation(async (opts) => {
         opts.onProgress?.(1, 1, 'mocked-repo');
         return [
           {
@@ -243,7 +243,7 @@ describe('cli > buildProgram', () => {
       await program.parseAsync([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         'bar',
         '--output',
         tmpFile,
@@ -262,7 +262,7 @@ describe('cli > buildProgram', () => {
     it('reports progress to stderr via onProgress callback', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
 
-      mocks.findStrings.mockImplementation(async (opts) => {
+      mocks.findMatches.mockImplementation(async (opts) => {
         opts.onProgress?.(1, 3, 'first');
         opts.onProgress?.(2, 3, 'second');
         opts.onProgress?.(3, 3, 'third');
@@ -281,7 +281,7 @@ describe('cli > buildProgram', () => {
       await program.parseAsync([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         'needle',
         '--output',
         tmpFile,
@@ -301,7 +301,7 @@ describe('cli > buildProgram', () => {
         { id: 2, name: 'beta', description: null },
       ]);
 
-      mocks.findStrings.mockImplementation(async (opts) => {
+      mocks.findMatches.mockImplementation(async (opts) => {
         opts.onRepoStart?.('alpha');
         opts.onProgress?.(1, 2, 'alpha');
         opts.onRepoStart?.('beta');
@@ -321,7 +321,7 @@ describe('cli > buildProgram', () => {
       await program.parseAsync([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         'needle',
         '--output',
         tmpFile,
@@ -340,7 +340,7 @@ describe('cli > buildProgram', () => {
         { id: 1, name: 'alpha', description: null },
         { id: 2, name: 'beta', description: null },
       ]);
-      mocks.findStrings.mockResolvedValue([
+      mocks.findMatches.mockResolvedValue([
         {
           projectId: 1,
           projectName: 'alpha',
@@ -367,7 +367,7 @@ describe('cli > buildProgram', () => {
       await program.parseAsync([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         'x',
         '--output',
         tmpFile,
@@ -380,7 +380,7 @@ describe('cli > buildProgram', () => {
 
     it('writes the report to stdout when --stdout is passed', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
-      mocks.findStrings.mockResolvedValue([
+      mocks.findMatches.mockResolvedValue([
         {
           projectId: 7,
           projectName: 'stdout-repo',
@@ -395,7 +395,7 @@ describe('cli > buildProgram', () => {
       await program.parseAsync([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         'needle',
         '--stdout',
       ]);
@@ -410,7 +410,7 @@ describe('cli > buildProgram', () => {
 
     it('parses comma-separated --exclude values into an array', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());
-      mocks.findStrings.mockResolvedValue([]);
+      mocks.findMatches.mockResolvedValue([]);
       mocks.writeFile.mockResolvedValue(undefined);
 
       const tmpFile = path.join(
@@ -423,7 +423,7 @@ describe('cli > buildProgram', () => {
       await program.parseAsync([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         'needle',
         '--exclude',
         'wip, archive , ,old',
@@ -431,8 +431,8 @@ describe('cli > buildProgram', () => {
         tmpFile,
       ]);
 
-      expect(mocks.findStrings).toHaveBeenCalledTimes(1);
-      const passedOpts = mocks.findStrings.mock.calls[0][0];
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findMatches.mock.calls[0][0];
       expect(passedOpts.excludeRepos).toEqual(['wip', 'archive', 'old']);
     });
   });
@@ -447,7 +447,7 @@ describe('cli > buildProgram', () => {
           excludeRepos: [],
           includeTests: false,
         },
-        commands: { 'find-strings': { concurrency: 5 } },
+        commands: { 'find-matches': { concurrency: 5 } },
       });
 
       const program = buildProgram();
@@ -456,7 +456,7 @@ describe('cli > buildProgram', () => {
         .parseAsync([
           'node',
           'gitlab-analyzer',
-          'find-strings',
+          'find-matches',
           'needle',
         ])
         .catch((e: unknown) => {
@@ -468,7 +468,7 @@ describe('cli > buildProgram', () => {
 
       const stderrText = collectWriteCalls(stderrSpy);
       // Error header from the action handler.
-      expect(stderrText).toMatch(/Error: Cannot run find-strings/);
+      expect(stderrText).toMatch(/Error: Cannot run find-matches/);
       // Consolidated list — every missing field appears in ONE error.
       expect(stderrText).toContain('gitlabUrl');
       expect(stderrText).toContain('PRIVATE_TOKEN');
@@ -497,7 +497,7 @@ describe('cli > runCli', () => {
       throw new Error(`process.exit(${String(_code)})`);
     }) as never);
     mocks.loadConfig.mockReset();
-    mocks.findStrings.mockReset();
+    mocks.findMatches.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -520,9 +520,9 @@ describe('cli > runCli', () => {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
-  it('returns normally on find-strings --help', async () => {
+  it('returns normally on find-matches --help', async () => {
     await expect(
-      runCli(['node', 'gitlab-analyzer', 'find-strings', '--help']),
+      runCli(['node', 'gitlab-analyzer', 'find-matches', '--help']),
     ).resolves.toBeUndefined();
     expect(exitSpy).not.toHaveBeenCalled();
   });
@@ -539,7 +539,7 @@ describe('cli > runCli', () => {
       runCli([
         'node',
         'gitlab-analyzer',
-        'find-strings',
+        'find-matches',
         '--definitely-not-a-real-flag',
       ]),
     ).rejects.toThrow('process.exit(2)');
@@ -548,7 +548,7 @@ describe('cli > runCli', () => {
 
   it('exits with code 2 when required <strings...> argument is missing', async () => {
     await expect(
-      runCli(['node', 'gitlab-analyzer', 'find-strings']),
+      runCli(['node', 'gitlab-analyzer', 'find-matches']),
     ).rejects.toThrow('process.exit(2)');
     expect(exitSpy).toHaveBeenCalledWith(2);
   });
@@ -557,7 +557,7 @@ describe('cli > runCli', () => {
     mocks.loadConfig.mockRejectedValue(new Error('boom'));
 
     await expect(
-      runCli(['node', 'gitlab-analyzer', 'find-strings', 'x']),
+      runCli(['node', 'gitlab-analyzer', 'find-matches', 'x']),
     ).rejects.toThrow('process.exit(1)');
 
     expect(exitSpy).toHaveBeenCalledWith(1);

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { extname } from 'node:path';
 import type { MatchResult } from '@gitlab-analyzer/core';
-import type { ResolvedFindStringsOptions } from './options.ts';
+import type { ResolvedFindMatchesOptions } from './options.ts';
 
 /**
  * Normalized report format, either the JSON object shape (default) or the
@@ -65,7 +65,7 @@ function hasExtension(path: string, ext: string): boolean {
  *
  * - If `--output` is provided, it is used verbatim (after a format/vs-extension
  *   conflict check) and overrides any auto-generated name.
- * - Otherwise an auto name `find-strings-results-<DATE>.<ext>` is generated in
+ * - Otherwise an auto name `find-matches-results-<DATE>.<ext>` is generated in
  *   the current directory; if a file with that name already exists a numeric
  *   suffix is appended before the extension (`-1`, `-2`, …) until a free name
  *   is found.
@@ -84,12 +84,12 @@ export function resolveOutputPath(
     return output;
   }
   const ext = format === 'txt' ? '.txt' : '.json';
-  const base = `find-strings-results-${date}${ext}`;
+  const base = `find-matches-results-${date}${ext}`;
   if (!existsSync(base)) {
     return base;
   }
   // Version existing auto-named files: -1, -2, ... up to a free name.
-  const stem = `find-strings-results-${date}`;
+  const stem = `find-matches-results-${date}`;
   let version = 1;
   let candidate = `${stem}-${version}${ext}`;
   while (existsSync(candidate)) {
@@ -191,7 +191,7 @@ export function renderReportTxt(report: Report): string {
  */
 export function buildReport(
   resolvedOptions: Pick<
-    ResolvedFindStringsOptions,
+    ResolvedFindMatchesOptions,
     'branch' | 'repoNameFilter' | 'pathFilter' | 'includeTests' | 'excludeRepos' | 'format' | 'stdout'
   >,
   strings: string[],

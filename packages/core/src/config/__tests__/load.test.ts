@@ -37,7 +37,7 @@ describe('loadConfig', () => {
       expect(config.defaults.excludeRepos).toEqual([]);
       expect(config.defaults.includeTests).toBe(false);
       expect(config.defaults.enableLogs).toBe(false);
-      expect(config.commands['find-strings'].concurrency).toBe(5);
+      expect(config.commands['find-matches'].concurrency).toBe(5);
     });
 
     it('returns fully defaulted config when search returns isEmpty: true', async () => {
@@ -51,7 +51,7 @@ describe('loadConfig', () => {
 
       expect(config.gitlab).toBeUndefined();
       expect(config.defaults.branch).toBe('develop');
-      expect(config.commands['find-strings'].concurrency).toBe(5);
+      expect(config.commands['find-matches'].concurrency).toBe(5);
     });
   });
 
@@ -68,7 +68,7 @@ describe('loadConfig', () => {
       expect(config.gitlab?.url).toBe('https://gitlab.example.com');
       expect(config.defaults.branch).toBe('develop');
       expect(config.defaults.excludeRepos).toEqual([]);
-      expect(config.commands['find-strings'].concurrency).toBe(5);
+      expect(config.commands['find-matches'].concurrency).toBe(5);
     });
 
     it('accepts a config with no gitlab block (url will come from env)', async () => {
@@ -94,7 +94,7 @@ describe('loadConfig', () => {
             includeTests: true,
           },
           commands: {
-            'find-strings': {
+            'find-matches': {
               concurrency: 10,
               output: './out.json',
             },
@@ -109,8 +109,8 @@ describe('loadConfig', () => {
       expect(config.defaults.branch).toBe('main');
       expect(config.defaults.excludeRepos).toEqual(['archived']);
       expect(config.defaults.includeTests).toBe(true);
-      expect(config.commands['find-strings'].concurrency).toBe(10);
-      expect(config.commands['find-strings'].output).toBe('./out.json');
+      expect(config.commands['find-matches'].concurrency).toBe(10);
+      expect(config.commands['find-matches'].output).toBe('./out.json');
     });
 
     it('preserves user-provided enableLogs: true', async () => {

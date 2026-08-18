@@ -11,7 +11,7 @@ import { defineConfig } from 'tsup';
  *   shebangs by default. `chmod +x` happens automatically when npm installs
  *   a `bin` field.
  * - `index` — re-export surface (`export * from '@gitlab-analyzer/core'`) so
- *   `import { findStrings } from 'gitlab-analyzer'` keeps working for the
+ *   `import { findMatches } from 'gitlab-analyzer'` keeps working for the
  *   pre-monorepo library consumers. Dual ESM + CJS + dts like core.
  *
  * Externalisation: `@gitlab-analyzer/core`, `commander`, `enquirer` stay in

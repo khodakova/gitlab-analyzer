@@ -1,7 +1,7 @@
 /**
  * Lightweight identifier for a single GitLab project, used when the caller
  * wants to narrow a search to a specific subset of repositories (e.g. the
- * `selectedRepos` option of `findStrings` or the interactive picker).
+ * `selectedRepos` option of `findMatches` or the interactive picker).
  */
 export type RepoInfo = {
   /** GitLab project ID. */
@@ -47,7 +47,7 @@ export type SearchProjectsItem = {
    * если поле отсутствует в ответе (старые API, фикстуры).
    *
    * repository_size — объём git-истории в байтах (используется в
-   * findStrings для приоритизации очереди: мелкие первыми,
+   * findMatches для приоритизации очереди: мелкие первыми,
    * гиганты последними). Тип number | null — как в getProjectRepositorySize.
    */
   statistics?: {

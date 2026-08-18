@@ -11,7 +11,7 @@ const emptyConfig = () => ({
     excludeRepos: [],
     includeTests: false,
   },
-  commands: { 'find-strings': { concurrency: 5 } },
+  commands: { 'find-matches': { concurrency: 5 } },
 });
 
 beforeEach(() => {
@@ -65,10 +65,10 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (result.ok) expect(result.resolved.includeTests).toBe(false);
     });
 
-    it('--concurrency overrides config.commands.find-strings.concurrency', () => {
+    it('--concurrency overrides config.commands.find-matches.concurrency', () => {
       const config = {
         ...emptyConfig(),
-        commands: { 'find-strings': { concurrency: 10 } },
+        commands: { 'find-matches': { concurrency: 10 } },
       };
 
       const result = resolveOptions(

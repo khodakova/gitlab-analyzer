@@ -9,6 +9,6 @@ Exposes `configureLogger` / `logger` in the library API.
 
 Also:
 - Suppress dotenv's "injected env" console chatter (`quiet: true`).
-- Add `projects` option to `findStrings` so a caller that already loaded the
+- Add `projects` option to `findMatches` so a caller that already loaded the
   project list can avoid a duplicate GitLab project fetch (and duplicate
   "Найдено репозиториев" log line). The CLI now passes its pre-filtered list.

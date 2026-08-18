@@ -10,9 +10,9 @@
     "includeTests": false
   },
   "commands": {
-    "find-strings": {
+    "find-matches": {
       "concurrency": 5,
-      "output": "./results/find-strings.json"
+      "output": "./results/find-matches.json"
     }
   }
 }

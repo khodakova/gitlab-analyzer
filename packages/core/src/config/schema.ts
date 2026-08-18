@@ -20,7 +20,7 @@ const DefaultsSchema = z.object({
   enableLogs: z.boolean().default(false),
 });
 
-const FindStringsCommandSchema = z.object({
+const FindMatchesCommandSchema = z.object({
   concurrency: z.number().int().positive().default(5),
   output: z.string().optional(),
 });
@@ -38,11 +38,11 @@ export const GitlabAnalyzerConfigSchema = z.object({
     enableLogs: false,
   })),
   commands: z.object({
-    'find-strings': FindStringsCommandSchema.default(() => ({
+    'find-matches': FindMatchesCommandSchema.default(() => ({
       concurrency: 5,
     })),
   }).default(() => ({
-    'find-strings': { concurrency: 5 },
+    'find-matches': { concurrency: 5 },
   })),
 });
 
