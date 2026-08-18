@@ -9,9 +9,10 @@ const emptyConfig = () => ({
   defaults: {
     branch: 'develop',
     excludeRepos: [],
-    includeTests: false,
+    fileInclude: [],
+    fileExclude: [],
   },
-  commands: { 'find-strings': { concurrency: 5 } },
+  commands: { 'find-matches': { concurrency: 5 } },
 });
 
 beforeEach(() => {
@@ -49,26 +50,42 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (result.ok) expect(result.resolved.repoNameFilter).toBe('frontend');
     });
 
-    it('--include-tests overrides config.defaults.includeTests', () => {
+    it('--file-include overrides config.defaults.fileInclude', () => {
       const config = {
         ...emptyConfig(),
-        defaults: { ...emptyConfig().defaults, includeTests: true },
+        defaults: { ...emptyConfig().defaults, fileInclude: ['**/*.md'] },
       };
 
       const result = resolveOptions(
         ['x'],
-        { includeTests: false },
+        { fileInclude: ['**/*.ts'] },
         config as never,
       );
 
       expect(result.ok).toBe(true);
-      if (result.ok) expect(result.resolved.includeTests).toBe(false);
+      if (result.ok) expect(result.resolved.fileInclude).toEqual(['**/*.ts']);
     });
 
-    it('--concurrency overrides config.commands.find-strings.concurrency', () => {
+    it('--file-exclude overrides config.defaults.fileExclude', () => {
       const config = {
         ...emptyConfig(),
-        commands: { 'find-strings': { concurrency: 10 } },
+        defaults: { ...emptyConfig().defaults, fileExclude: ['**/*.min.js'] },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { fileExclude: ['**/*.test.ts'] },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileExclude).toEqual(['**/*.test.ts']);
+    });
+
+    it('--concurrency overrides config.commands.find-matches.concurrency', () => {
+      const config = {
+        ...emptyConfig(),
+        commands: { 'find-matches': { concurrency: 10 } },
       };
 
       const result = resolveOptions(
@@ -109,6 +126,60 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.resolved.excludeRepos).toEqual(['archived', 'wip']);
     });
+
+    it('falls back to config.defaults.fileInclude / fileExclude when CLI is silent', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: {
+          ...emptyConfig().defaults,
+          fileInclude: ['**/*.ts'],
+          fileExclude: ['**/*.test.ts'],
+        },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.fileInclude).toEqual(['**/*.ts']);
+        expect(result.resolved.fileExclude).toEqual(['**/*.test.ts']);
+      }
+    });
+
+    it('CLI arrays win verbatim (replace, NOT merge)', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: {
+          ...emptyConfig().defaults,
+          fileInclude: ['c'],
+        },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { fileInclude: ['a', 'b'] },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileInclude).toEqual(['a', 'b']);
+    });
+
+    it('config fileInclude: [] does NOT block CLI override', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileInclude: [] },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { fileInclude: ['**/*.ts'] },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileInclude).toEqual(['**/*.ts']);
+    });
   });
 
   describe('precedence — built-in default when nothing else', () => {
@@ -119,11 +190,18 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (result.ok) expect(result.resolved.branch).toBe('develop');
     });
 
-    it('pathFilter defaults to "/src/"', () => {
+    it('fileInclude defaults to []', () => {
       const result = resolveOptions(['x'], {}, emptyConfig() as never);
 
       expect(result.ok).toBe(true);
-      if (result.ok) expect(result.resolved.pathFilter).toBe('/src/');
+      if (result.ok) expect(result.resolved.fileInclude).toEqual([]);
+    });
+
+    it('fileExclude defaults to []', () => {
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileExclude).toEqual([]);
     });
 
     it('concurrency defaults to 5', () => {
@@ -303,6 +381,24 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
         expect(res.resolved.format).toBe('txt');
         expect(res.resolved.stdout).toBe(true);
       }
+    });
+  });
+
+  describe('metricsFile', () => {
+    it('defaults to undefined when the CLI flag is absent', () => {
+      const res = resolveOptions(['x'], {}, emptyConfig() as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.metricsFile).toBeUndefined();
+    });
+
+    it('resolves from the CLI flag only (not config)', () => {
+      const res = resolveOptions(
+        ['x'],
+        { metricsFile: './m.ndjson' },
+        emptyConfig() as never,
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.metricsFile).toBe('./m.ndjson');
     });
   });
 });

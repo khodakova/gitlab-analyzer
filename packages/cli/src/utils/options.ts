@@ -1,13 +1,13 @@
 import type { GitlabAnalyzerConfig } from '@gitlab-analyzer/core/internal';
 
 /**
- * CLI options for the `find-strings` subcommand. Produced by commander and
- * passed into `runFindStrings`.
+ * CLI options for the `find-matches` subcommand. Produced by commander and
+ * passed into `runFindMatches`.
  *
  * All fields are optional at the type level because commander only assigns
  * them when the corresponding flag is present. {@link resolveOptions}
  * fills in config-file and built-in defaults before building the
- * `ResolvedFindStringsOptions` handed to the library.
+ * `ResolvedFindMatchesOptions` handed to the library.
  *
  * Resolution precedence (highest wins):
  *
@@ -15,29 +15,33 @@ import type { GitlabAnalyzerConfig } from '@gitlab-analyzer/core/internal';
  *   2. Environment variable (`PRIVATE_TOKEN`, `GITLAB_URL` — the latter
  *      typically populated by `.env` via dotenv)
  *   3. `gitlab-analyzer.json` config file (`defaults.*`,
- *      `commands.find-strings.*`, `gitlab.url`)
- *   4. Built-in default (`'develop'` for branch, `/src/` for path filter,
- *      `false` for includeTests, `5` for concurrency, etc.)
+ *      `commands.find-matches.*`, `gitlab.url`)
+ *   4. Built-in default (`'develop'` for branch, `[]` for fileInclude /
+ *      fileExclude, `5` for concurrency, etc.)
  */
-export type FindStringsCliOptions = {
+export type FindMatchesCliOptions = {
   repoFilter?: string;
   exclude?: string[];
   branch?: string;
-  pathFilter?: string;
-  includeTests?: boolean;
+  /** Glob patterns to SCAN (commander returns string[] from comma-split). */
+  fileInclude?: string[];
+  /** Glob patterns to SKIP (commander returns string[] from comma-split). */
+  fileExclude?: string[];
   output?: string;
   concurrency?: number;
   interactive?: boolean;
   enableLogs?: boolean;
   format?: 'txt' | 'json';
   stdout?: boolean;
+  /** Path to write performance metrics (NDJSON). Diagnostic; only via CLI flag. */
+  metricsFile?: string;
 };
 
 /**
- * Fully resolved `find-strings` options — every required field is present
+ * Fully resolved `find-matches` options — every required field is present
  * (or the `errors` array is non-empty in {@link resolveOptions}'s return).
  */
-export type ResolvedFindStringsOptions = {
+export type ResolvedFindMatchesOptions = {
   /** Base URL of the GitLab instance (from `GITLAB_URL` env or `gitlab.url` config). */
   gitlabUrl: string;
   /** Branch to scan. */
@@ -46,10 +50,10 @@ export type ResolvedFindStringsOptions = {
   repoNameFilter: string | undefined;
   /** Project names to skip. */
   excludeRepos: string[];
-  /** Substring filter for file paths inside each archive. */
-  pathFilter: string;
-  /** Whether to include `*.test.*` files. */
-  includeTests: boolean;
+  /** Glob patterns for file paths to SCAN. Always an array (empty = scan all). */
+  fileInclude: string[];
+  /** Glob patterns for file paths to SKIP (gitignore-style). Always an array. */
+  fileExclude: string[];
   /** Max parallel archive-fetch + zip-parse tasks. */
   concurrency: number;
   /** Output file path; `undefined` → auto-generated name. */
@@ -62,6 +66,8 @@ export type ResolvedFindStringsOptions = {
   format: 'txt' | 'json';
   /** When true, also write the report to stdout (in addition to the file). */
   stdout: boolean;
+  /** Path to write performance metrics (NDJSON); `undefined` → no metrics file. */
+  metricsFile: string | undefined;
 };
 
 /**
@@ -75,11 +81,11 @@ export type ResolveError = {
 };
 
 export type ResolveResult =
-  | { ok: true; resolved: ResolvedFindStringsOptions }
+  | { ok: true; resolved: ResolvedFindMatchesOptions }
   | { ok: false; errors: ResolveError[] };
 
 /**
- * Resolve every `find-strings` option using the documented precedence
+ * Resolve every `find-matches` option using the documented precedence
  * (CLI → env → config → built-in default) and collect ALL missing-required
  * fields into a single structured error list.
  *
@@ -97,7 +103,7 @@ export type ResolveResult =
  */
 export function resolveOptions(
   strings: readonly string[],
-  cliOpts: FindStringsCliOptions,
+  cliOpts: FindMatchesCliOptions,
   config: GitlabAnalyzerConfig,
 ): ResolveResult {
   const errors: ResolveError[] = [];
@@ -130,7 +136,7 @@ export function resolveOptions(
   }
 
   // Optional/derived with fallback chain: CLI > env > config > built-in default.
-  const cmdDefaults = config.commands?.['find-strings'];
+  const cmdDefaults = config.commands?.['find-matches'];
 
   // `enableLogs` — CLI flag > ENABLE_LOGS env > config.defaults.enableLogs >
   // built-in default (false). ENABLE_LOGS accepts '1', 'true', 'yes', 'on' as
@@ -148,16 +154,17 @@ export function resolveOptions(
     config.defaults?.enableLogs ??
     false;
 
-  const resolved: ResolvedFindStringsOptions = {
+  const resolved: ResolvedFindMatchesOptions = {
     gitlabUrl: gitlabUrl as string, // safe: gated above; errors[] is non-empty if missing
     branch: cliOpts.branch ?? config.defaults?.branch ?? 'develop',
     repoNameFilter:
       cliOpts.repoFilter ?? config.defaults?.repoNameFilter,
     excludeRepos:
       cliOpts.exclude ?? config.defaults?.excludeRepos ?? [],
-    pathFilter: cliOpts.pathFilter ?? config.defaults?.pathFilter ?? '/src/',
-    includeTests:
-      cliOpts.includeTests ?? config.defaults?.includeTests ?? false,
+    fileInclude:
+      cliOpts.fileInclude ?? config.defaults?.fileInclude ?? [],
+    fileExclude:
+      cliOpts.fileExclude ?? config.defaults?.fileExclude ?? [],
     concurrency:
       cliOpts.concurrency ?? cmdDefaults?.concurrency ?? 5,
     output: cliOpts.output ?? cmdDefaults?.output,
@@ -165,6 +172,9 @@ export function resolveOptions(
     enableLogs,
     format: cliOpts.format ?? 'json',
     stdout: cliOpts.stdout ?? false,
+    // metricsFile comes ONLY from the CLI flag (diagnostic, opt-in) — never
+    // from config or env (spec decision 12).
+    metricsFile: cliOpts.metricsFile,
   };
 
   if (errors.length > 0) {

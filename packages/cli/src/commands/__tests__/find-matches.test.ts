@@ -4,7 +4,7 @@ import os from 'node:os';
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  findStrings: vi.fn(),
+  findMatches: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
   repoSelect: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock('@gitlab-analyzer/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@gitlab-analyzer/core')>();
   return {
     ...actual,
-    findStrings: mocks.findStrings,
+    findMatches: mocks.findMatches,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -45,7 +45,7 @@ vi.mock('../../utils/repo-select.ts', () => ({
   enquirerRepoSelect: vi.fn(),
 }));
 
-import { runFindStrings } from '../find-strings.ts';
+import { runFindMatches } from '../find-matches.ts';
 import * as loggerModule from '@gitlab-analyzer/core';
 
 const TEST_GITLAB_URL = 'https://gitlab.example.com';
@@ -55,10 +55,11 @@ const defaultConfig = () => ({
   defaults: {
     branch: 'develop',
     excludeRepos: [],
-    includeTests: false,
+    fileInclude: [],
+    fileExclude: [],
   },
   commands: {
-    'find-strings': { concurrency: 5 },
+    'find-matches': { concurrency: 5 },
   },
 });
 
@@ -70,7 +71,7 @@ beforeEach(() => {
   process.env.PRIVATE_TOKEN = TEST_PRIVATE_TOKEN;
 });
 
-describe('runFindStrings (exported helper)', () => {
+describe('runFindMatches (exported helper)', () => {
   let stderrSpy: ReturnType<typeof vi.spyOn>;
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
 
@@ -82,7 +83,7 @@ describe('runFindStrings (exported helper)', () => {
       .spyOn(process.stdout, 'write')
       .mockImplementation(() => true);
     mocks.loadConfig.mockReset();
-    mocks.findStrings.mockReset();
+    mocks.findMatches.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -101,26 +102,27 @@ describe('runFindStrings (exported helper)', () => {
     stdoutSpy.mockRestore();
   });
 
-  it('merges CLI options with config defaults and forwards to findStrings', async () => {
+  it('merges CLI options with config defaults and forwards to findMatches', async () => {
     mocks.loadConfig.mockResolvedValue({
       gitlab: { url: 'https://gitlab.example.com' },
       defaults: {
         branch: 'main',
         excludeRepos: ['archive'],
-        includeTests: false,
+        fileInclude: [],
+        fileExclude: [],
       },
-      commands: { 'find-strings': { concurrency: 10 } },
+      commands: { 'find-matches': { concurrency: 10 } },
     });
 
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['needle'], {
+    const result = await runFindMatches(['needle'], {
       branch: 'develop', // CLI override
       repoFilter: 'frontend',
       exclude: ['wip'], // CLI override
-      pathFilter: '/lib/',
-      includeTests: true,
+      fileInclude: ['**/*.ts'],
+      fileExclude: ['**/*.test.ts'],
       concurrency: 3, // CLI override
     });
 
@@ -132,7 +134,7 @@ describe('runFindStrings (exported helper)', () => {
       error: null,
     });
     // No --output → an auto-named file is generated (not stdout).
-    expect(result.outputPath).toMatch(/^find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+    expect(result.outputPath).toMatch(/^find-matches-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
     const [autoPath, payload] = mocks.writeFile.mock.calls[0];
     expect(autoPath).toBe(result.outputPath);
@@ -140,15 +142,15 @@ describe('runFindStrings (exported helper)', () => {
     expect(String(payload)).toContain('"metadata"');
     expect(String(payload)).toContain('"repositories"');
 
-    expect(mocks.findStrings).toHaveBeenCalledTimes(1);
-    expect(mocks.findStrings).toHaveBeenCalledWith(
+    expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+    expect(mocks.findMatches).toHaveBeenCalledWith(
       expect.objectContaining({
         searchStrings: ['needle'],
         branch: 'develop', // CLI wins over config
         repoNameFilter: 'frontend',
         excludeRepos: ['wip'], // CLI wins over config
-        pathFilter: '/lib/',
-        includeTests: true,
+        fileInclude: ['**/*.ts'],
+        fileExclude: ['**/*.test.ts'],
         concurrency: 3, // CLI wins over config (10)
       }),
     );
@@ -161,50 +163,73 @@ describe('runFindStrings (exported helper)', () => {
         branch: 'develop',
         repoNameFilter: 'backend',
         excludeRepos: ['skip-me'],
-        pathFilter: '/app/',
-        includeTests: false,
+        fileInclude: ['**/app/**'],
+        fileExclude: [],
       },
-      commands: { 'find-strings': { concurrency: 7 } },
+      commands: { 'find-matches': { concurrency: 7 } },
     });
 
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    await runFindStrings(['x'], {});
+    await runFindMatches(['x'], {});
 
-    expect(mocks.findStrings).toHaveBeenCalledTimes(1);
-    expect(mocks.findStrings).toHaveBeenCalledWith(
+    expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+    expect(mocks.findMatches).toHaveBeenCalledWith(
       expect.objectContaining({
         searchStrings: ['x'],
         branch: 'develop',
         repoNameFilter: 'backend',
         excludeRepos: ['skip-me'],
-        pathFilter: '/app/',
-        includeTests: false,
+        fileInclude: ['**/app/**'],
+        fileExclude: [],
         concurrency: 7,
       }),
     );
   });
 
-  it('uses commands.find-strings.output as fallback when --output is omitted', async () => {
+  it('forwards empty fileInclude/fileExclude as [] when both CLI and config are silent', async () => {
+    mocks.loadConfig.mockResolvedValue({
+      gitlab: { url: 'https://gitlab.example.com' },
+      defaults: {},
+      commands: { 'find-matches': {} },
+    });
+
+    mocks.findMatches.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+
+    await runFindMatches(['x'], {});
+
+    expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+    expect(mocks.findMatches).toHaveBeenCalledWith(
+      expect.objectContaining({
+        searchStrings: ['x'],
+        fileInclude: [],
+        fileExclude: [],
+      }),
+    );
+  });
+
+  it('uses commands.find-matches.output as fallback when --output is omitted', async () => {
     mocks.loadConfig.mockResolvedValue({
       gitlab: { url: 'https://gitlab.example.com' },
       defaults: {
         branch: 'develop',
         excludeRepos: [],
-        includeTests: false,
+        fileInclude: [],
+        fileExclude: [],
       },
       commands: {
-        'find-strings': {
+        'find-matches': {
           concurrency: 5,
           output: '/tmp/from-config.json',
         },
       },
     });
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['x'], {});
+    const result = await runFindMatches(['x'], {});
 
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
     expect(mocks.writeFile.mock.calls[0][0]).toBe('/tmp/from-config.json');
@@ -213,7 +238,7 @@ describe('runFindStrings (exported helper)', () => {
 
   it('creates the parent directory of --output recursively before writing', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
 
@@ -224,7 +249,7 @@ describe('runFindStrings (exported helper)', () => {
     );
     const outputPath = path.join(nestedDir, 'result.json');
 
-    const result = await runFindStrings(['x'], { output: outputPath });
+    const result = await runFindMatches(['x'], { output: outputPath });
 
     expect(mocks.mkdir).toHaveBeenCalledTimes(1);
     expect(mocks.mkdir).toHaveBeenCalledWith(path.dirname(outputPath), {
@@ -238,14 +263,14 @@ describe('runFindStrings (exported helper)', () => {
 
   it('writes an auto-named file when --output is omitted', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['x'], {});
+    const result = await runFindMatches(['x'], {});
 
     expect(mocks.mkdir).toHaveBeenCalledTimes(1);
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
-    expect(result.outputPath).toMatch(/^find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+    expect(result.outputPath).toMatch(/^find-matches-results-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
   });
 
   it('prints the resolved repo list to stderr in headless mode', async () => {
@@ -255,22 +280,22 @@ describe('runFindStrings (exported helper)', () => {
       { id: 2, name: 'beta', description: null },
       { id: 3, name: 'skip', description: null },
     ]);
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['x'], {});
+    const result = await runFindMatches(['x'], {});
 
     const stderrText = collectWriteCalls(stderrSpy);
     expect(stderrText).toContain('Будет выполнен поиск по 3 репозиториям:');
     expect(stderrText).toContain('alpha');
     expect(stderrText).toContain('beta');
     expect(stderrText).toContain('skip');
-    expect(result.outputPath).toMatch(/find-strings-results-\d{4}-\d{2}-\d{2}-\d{4}\.json/);
+    expect(result.outputPath).toMatch(/find-matches-results-\d{4}-\d{2}-\d{2}-\d{4}\.json/);
   });
 
   it('shows a loader while the repository list is being fetched', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
 
@@ -291,7 +316,7 @@ describe('runFindStrings (exported helper)', () => {
 
     vi.useFakeTimers();
     try {
-      const runPromise = runFindStrings(['x'], {});
+      const runPromise = runFindMatches(['x'], {});
 
       await vi.advanceTimersByTimeAsync(150);
 
@@ -317,22 +342,22 @@ describe('runFindStrings (exported helper)', () => {
     }
   });
 
-  it('passes the pre-filtered project list to findStrings (no duplicate fetch)', async () => {
+  it('passes the pre-filtered project list to findMatches (no duplicate fetch)', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
     mocks.getAllProjects.mockResolvedValue([
       { id: 1, name: 'alpha', description: 'A' },
       { id: 2, name: 'beta', description: 'B' },
       { id: 3, name: 'skip', description: 'S' },
     ]);
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    await runFindStrings(['x'], { exclude: ['skip'] });
+    await runFindMatches(['x'], { exclude: ['skip'] });
 
     expect(mocks.getAllProjects).toHaveBeenCalledTimes(1);
 
-    expect(mocks.findStrings).toHaveBeenCalledTimes(1);
-    const passedOpts = mocks.findStrings.mock.calls[0][0];
+    expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+    const passedOpts = mocks.findMatches.mock.calls[0][0];
     expect(passedOpts.projects).toEqual([
       { id: 1, name: 'alpha', description: 'A' },
       { id: 2, name: 'beta', description: 'B' },
@@ -343,14 +368,14 @@ describe('runFindStrings (exported helper)', () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
     mocks.getAllProjects.mockResolvedValue([]);
     mocks.repoSelect.mockResolvedValue([{ id: 1, name: 'alpha' }]);
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
     const configureSpy = vi
       .spyOn(loggerModule, 'configureLogger')
       .mockImplementation(() => {});
 
-    await runFindStrings(['x'], { interactive: true });
+    await runFindMatches(['x'], { interactive: true });
 
     expect(configureSpy).toHaveBeenCalledWith({ enabled: true });
     configureSpy.mockRestore();
@@ -358,14 +383,14 @@ describe('runFindStrings (exported helper)', () => {
 
   it('keeps the central logger disabled when neither --enable-logs nor --interactive', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
     const configureSpy = vi
       .spyOn(loggerModule, 'configureLogger')
       .mockImplementation(() => {});
 
-    await runFindStrings(['x'], {});
+    await runFindMatches(['x'], {});
 
     expect(configureSpy).toHaveBeenCalledWith({ enabled: false });
     configureSpy.mockRestore();
@@ -377,7 +402,7 @@ describe('runFindStrings (exported helper)', () => {
       { id: 1, name: 'good', description: 'G' },
       { id: 2, name: 'badbranch', description: null },
     ]);
-    mocks.findStrings.mockImplementation(async (opts) => {
+    mocks.findMatches.mockImplementation(async (opts) => {
       opts.onProgress?.(1, 2, 'good');
       opts.onProgress?.(
         2,
@@ -403,7 +428,7 @@ describe('runFindStrings (exported helper)', () => {
     });
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['needle'], {
+    const result = await runFindMatches(['needle'], {
       format: 'json',
     });
 
@@ -427,7 +452,7 @@ describe('runFindStrings (exported helper)', () => {
 
   it('writes txt payload to the auto-named .txt file when --format txt', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([
+    mocks.findMatches.mockResolvedValue([
       {
         projectId: 1,
         projectName: 'alpha',
@@ -444,7 +469,7 @@ describe('runFindStrings (exported helper)', () => {
     ]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    const result = await runFindStrings(['needle'], { format: 'txt' });
+    const result = await runFindMatches(['needle'], { format: 'txt' });
 
     expect(result.outputPath).toMatch(/\.txt$/);
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
@@ -457,18 +482,18 @@ describe('runFindStrings (exported helper)', () => {
 
   it('does NOT call repoSelect (headless) when --interactive is absent', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.repoSelect.mockResolvedValue([]);
 
-    await runFindStrings(['needle'], {});
+    await runFindMatches(['needle'], {});
 
     expect(mocks.repoSelect).not.toHaveBeenCalled();
   });
 
-  it('runs the picker and passes selectedRepos to findStrings when --interactive', async () => {
+  it('runs the picker and passes selectedRepos to findMatches when --interactive', async () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.getAllProjects.mockResolvedValue([
       { id: 1, name: 'alpha', description: null },
@@ -479,11 +504,11 @@ describe('runFindStrings (exported helper)', () => {
       { id: 2, name: 'beta' },
     ]);
 
-    await runFindStrings(['needle'], { interactive: true });
+    await runFindMatches(['needle'], { interactive: true });
 
     expect(mocks.repoSelect).toHaveBeenCalledTimes(1);
-    expect(mocks.findStrings).toHaveBeenCalledTimes(1);
-    const passedOpts = mocks.findStrings.mock.calls[0][0];
+    expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+    const passedOpts = mocks.findMatches.mock.calls[0][0];
     expect(passedOpts.selectedRepos).toEqual([
       { id: 1, name: 'alpha' },
       { id: 2, name: 'beta' },
@@ -499,14 +524,14 @@ describe('runFindStrings (exported helper)', () => {
     }) as never);
 
     mocks.loadConfig.mockResolvedValue(defaultConfig());
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.getAllProjects.mockResolvedValue([
       { id: 1, name: 'alpha', description: null },
     ]);
     mocks.repoSelect.mockResolvedValue([]);
 
-    await runFindStrings(['needle'], { interactive: true })
+    await runFindMatches(['needle'], { interactive: true })
       .then(() => {
         throw new Error('expected process.exit(0) to be called');
       })
@@ -516,7 +541,7 @@ describe('runFindStrings (exported helper)', () => {
       });
 
     expect(exitSpy).toHaveBeenCalledWith(0);
-    expect(mocks.findStrings).not.toHaveBeenCalled();
+    expect(mocks.findMatches).not.toHaveBeenCalled();
     const stderrText = collectWriteCalls(stderrSpy);
     expect(stderrText).toMatch(/поиск|репозитори|cancel|отмен|ничего/i);
     exitSpy.mockRestore();
@@ -533,9 +558,9 @@ describe('runFindStrings (exported helper)', () => {
     mocks.loadConfig.mockResolvedValue(defaultConfig());
     // No projects match the filter (explicit empty).
     mocks.getAllProjects.mockResolvedValue([]);
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
 
-    await runFindStrings(['needle'], {})
+    await runFindMatches(['needle'], {})
       .then(() => {
         throw new Error('expected process.exit(0) to be called');
       })
@@ -545,7 +570,7 @@ describe('runFindStrings (exported helper)', () => {
       });
 
     expect(exitSpy).toHaveBeenCalledWith(0);
-    expect(mocks.findStrings).not.toHaveBeenCalled();
+    expect(mocks.findMatches).not.toHaveBeenCalled();
     expect(mocks.writeFile).not.toHaveBeenCalled();
     const stderrText = collectWriteCalls(stderrSpy);
     expect(stderrText).toMatch(/не найдены|фильтр|исключени/i);
@@ -560,10 +585,10 @@ describe('runFindStrings (exported helper)', () => {
     mocks.getAllProjects.mockResolvedValue([
       { id: 1, name: 'alpha', description: null },
     ]);
-    mocks.findStrings.mockResolvedValue([]);
+    mocks.findMatches.mockResolvedValue([]);
     mocks.writeFile.mockResolvedValue(undefined);
 
-    await runFindStrings(['needle'], {});
+    await runFindMatches(['needle'], {});
     // Logger writes go through an async queue; drain it before asserting stderr.
     await loggerModule.flushLogs();
 
@@ -581,7 +606,7 @@ describe('runFindStrings (exported helper)', () => {
       { id: 1, name: 'good', description: null },
       { id: 2, name: 'bad', description: null },
     ]);
-    mocks.findStrings.mockImplementation(async (opts) => {
+    mocks.findMatches.mockImplementation(async (opts) => {
       opts.onProgress?.(1, 2, 'good');
       opts.onProgress?.(2, 2, 'bad', 'boom');
       return [
@@ -598,7 +623,7 @@ describe('runFindStrings (exported helper)', () => {
     });
     mocks.writeFile.mockResolvedValue(undefined);
 
-    await runFindStrings(['needle'], { output: '/tmp/out.json' });
+    await runFindMatches(['needle'], { output: '/tmp/out.json' });
     await loggerModule.flushLogs();
 
     const stderrText = collectWriteCalls(stderrSpy);
@@ -607,5 +632,118 @@ describe('runFindStrings (exported helper)', () => {
     expect(stderrText).toContain('✓ Отчёт: /tmp/out.json');
     // blank separator line between the search output and the summary block
     expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Отсканировано репозиториев: 2/);
+  });
+
+  describe('performance metrics (--metrics-file + stderr summary)', () => {
+    it('prints a Metrics stderr summary line even without --metrics-file', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], {});
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('Metrics:');
+    });
+
+    it('writes NDJSON run/repo/summary to --metrics-file (summary last)', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'good', description: null },
+        { id: 2, name: 'bad', description: null },
+      ]);
+      // Drive metrics through findMatches' own `opts.metrics` accumulator.
+      mocks.findMatches.mockImplementation(async (opts) => {
+        opts.metrics?.perRepo.push({
+          projectId: 1, projectName: 'good', downloadMs: 10, unzipMs: 5, scanMs: 3,
+          totalMs: 20, filesScanned: 2, filesMatched: 1, textLength: 100,
+        });
+        opts.metrics?.perRepo.push({
+          projectId: 2, projectName: 'bad', downloadMs: 60000, unzipMs: 0, scanMs: 0,
+          totalMs: 61000, filesScanned: 0, filesMatched: 0, textLength: 0, error: 'timeout',
+        });
+        opts.onProgress?.(1, 2, 'good');
+        opts.onProgress?.(2, 2, 'bad', 'timeout');
+        return [];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-${Date.now()}-${Math.random().toString(36).slice(2)}.ndjson`);
+      await runFindMatches(['needle'], { metricsFile: metricsPath });
+
+      const metricsCall = mocks.writeFile.mock.calls.find((c) => String(c[0]) === metricsPath);
+      expect(metricsCall).toBeDefined();
+      const content = String(metricsCall![1]);
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(4);
+      expect(JSON.parse(lines[0]).t).toBe('run');
+      expect(JSON.parse(lines[1]).t).toBe('repo');
+      expect(JSON.parse(lines[2]).t).toBe('repo');
+      // summary is the last line.
+      expect(JSON.parse(lines[3]).t).toBe('summary');
+      const summary = JSON.parse(lines[3]);
+      expect(summary.exitReason).toBe('complete');
+      expect(summary.repos).toBe(2);
+      expect(summary.ok).toBe(1);
+      expect(summary.errored).toBe(1);
+      expect(summary.maxRepoName).toBe('bad');
+      expect(summary.totalHeapGrowthBytes).toBeTypeOf('number');
+      const repo2 = JSON.parse(lines[2]);
+      expect(repo2.error).toBe('timeout');
+    });
+
+    it('does not create a metrics file when the flag is absent', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], {});
+      // Only the report write happens — no metrics file.
+      expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns (not fatal) when writing --metrics-file fails', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockImplementation(async (p: unknown) => {
+        if (String(p).includes('.ndjson')) throw new Error('disk full');
+      });
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-${Date.now()}.ndjson`);
+      const result = await runFindMatches(['needle'], { metricsFile: metricsPath });
+
+      // Report still written, command succeeds (no throw).
+      expect(result.report).toBeTruthy();
+      expect(result.outputPath).toBeTruthy();
+      await loggerModule.flushLogs();
+      expect(collectWriteCalls(stderrSpy)).toContain('Не удалось записать файл метрик (');
+    });
+
+    it('writes run+summary with exitReason=cancel on interactive empty selection', async () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((((_code?: number | string | null) => {
+        throw new Error(`process.exit(${String(_code)})`);
+      }) as never));
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([{ id: 1, name: 'alpha', description: null }]);
+      mocks.repoSelect.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-cancel-${Date.now()}.ndjson`);
+      await runFindMatches(['needle'], { interactive: true, metricsFile: metricsPath })
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(0)') return;
+          throw e;
+        });
+
+      const metricsCall = mocks.writeFile.mock.calls.find((c) => String(c[0]) === metricsPath);
+      expect(metricsCall).toBeDefined();
+      const content = String(metricsCall![1]);
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0]).t).toBe('run');
+      expect(JSON.parse(lines[0]).exitReason).toBe('cancel');
+      expect(JSON.parse(lines[1]).t).toBe('summary');
+      expect(JSON.parse(lines[1]).exitReason).toBe('cancel');
+      exitSpy.mockRestore();
+    });
   });
 });

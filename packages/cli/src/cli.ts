@@ -4,8 +4,8 @@
 import { Command, Option, CommanderError } from 'commander';
 import { fileURLToPath } from 'node:url';
 import { logger, flushLogs } from '@gitlab-analyzer/core';
-import { runFindStrings } from './commands/find-strings.ts';
-import type { FindStringsCliOptions } from './utils/options.ts';
+import { runFindMatches } from './commands/find-matches.ts';
+import type { FindMatchesCliOptions } from './utils/options.ts';
 
 // The thin CLI layer only wires commander to the command implementations.
 // All option resolution, repo fetching, search orchestration, report
@@ -17,7 +17,7 @@ import type { FindStringsCliOptions } from './utils/options.ts';
  * `.exitOverride().parseAsync(argv)` and capture errors / output without
  * touching real `process.exit` or `process.stderr`.
  *
- * Note: `exitOverride()` is called BEFORE adding the `find-strings`
+ * Note: `exitOverride()` is called BEFORE adding the `find-matches`
  * subcommand so that the subcommand inherits the override callback via
  * `copyInheritedSettings`. If you call `program.exitOverride()` *after*
  * `buildProgram()` returns, the subcommand will still call `process.exit`
@@ -39,7 +39,7 @@ export function buildProgram(): Command {
     .version('0.1.0');
 
   program
-    .command('find-strings')
+    .command('find-matches')
     .description(
       'Search for specific strings across all GitLab projects reachable from the configured instance',
     )
@@ -60,11 +60,30 @@ export function buildProgram(): Command {
           .filter((s) => s.length > 0),
     )
     .option('-b, --branch <name>', 'Branch to scan in every project')
-    .option('-p, --path-filter <str>', 'Substring filter for file paths inside the archive')
-    .option('--include-tests', 'Include *.test.* files in the search')
+    .option(
+      '--file-include <list>',
+      [
+        'Comma-separated glob patterns for file paths to scan (empty = scan all).',
+        "Paths from the archive keep a leading '/', so `*.ts` does NOT match `/src/foo.ts` — use `**/*.ts` (anywhere) or `**/src/**/*.ts` / `/src/**/*.ts` (only under `/src/`); `src/**/*.ts` does NOT work because the path starts with `/`.",
+      ].join(' '),
+      (val: string) =>
+        val
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+    )
+    .option(
+      '--file-exclude <list>',
+      'Comma-separated glob patterns for file paths to skip (gitignore-style, wins over --file-include; same `*.ts` vs `**/*.ts` rule as --file-include)',
+      (val: string) =>
+        val
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+    )
     .option(
       '--interactive',
-      'Let you choose which repositories to search (space toggles a repo, Enter confirms); empty selection cancels',
+      'Let you choose which repositories to search (all pre-selected; ↑/↓ scrolls, space toggles, Enter confirms); empty selection cancels',
     )
     .option(
       '--enable-logs',
@@ -82,13 +101,17 @@ export function buildProgram(): Command {
     )
     .option('-o, --output <path>', 'Path to write the report; omit to use an auto-generated file name')
     .option(
+      '--metrics-file <path>',
+      'Write performance metrics (NDJSON: run/repo/summary) to this file. Diagnostic only — does not affect the report.',
+    )
+    .option(
       '-c, --concurrency <n>',
       'Maximum number of parallel archive-fetch + zip-parse tasks',
       (val: string) => parseInt(val, 10),
     )
-    .action(async (strings: string[], opts: FindStringsCliOptions) => {
+    .action(async (strings: string[], opts: FindMatchesCliOptions) => {
       try {
-        await runFindStrings(strings, opts);
+        await runFindMatches(strings, opts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error(`Error: ${message}`);
@@ -116,7 +139,7 @@ export function buildProgram(): Command {
  * Internally this enables commander's `exitOverride()` so the function can
  * catch and translate usage errors instead of commander calling
  * `process.exit` directly. Tests should drive {@link buildProgram} (or
- * `runFindStrings`) directly when they want full control over commander's
+ * `runFindMatches`) directly when they want full control over commander's
  * error machinery.
  *
  * @param argv - Optional override for `process.argv`. Defaults to the
@@ -161,7 +184,7 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
  * so commander never sees the argv and nothing happens.
  *
  * When the module is *imported* instead of executed (Vitest tests, downstream
- * consumers pulling in `runCli` / `buildProgram` / `runFindStrings`), the
+ * consumers pulling in `runCli` / `buildProgram` / `runFindMatches`), the
  * guard is false and no CLI startup happens — so the public surface stays
  * side-effect-free for library use.
  *

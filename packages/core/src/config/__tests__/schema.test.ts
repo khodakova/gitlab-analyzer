@@ -11,9 +11,10 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.gitlab?.url).toBe('https://gitlab.com');
       expect(parsed.defaults.branch).toBe('develop');
       expect(parsed.defaults.excludeRepos).toEqual([]);
-      expect(parsed.defaults.includeTests).toBe(false);
-      expect(parsed.commands['find-strings'].concurrency).toBe(5);
-      expect(parsed.commands['find-strings'].output).toBeUndefined();
+      expect(parsed.defaults.fileInclude).toEqual([]);
+      expect(parsed.defaults.fileExclude).toEqual([]);
+      expect(parsed.commands['find-matches'].concurrency).toBe(5);
+      expect(parsed.commands['find-matches'].output).toBeUndefined();
     });
 
     it('parses empty {} and applies all defaults (url must come from env)', () => {
@@ -26,8 +27,9 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.gitlab).toBeUndefined();
       expect(parsed.defaults.branch).toBe('develop');
       expect(parsed.defaults.excludeRepos).toEqual([]);
-      expect(parsed.defaults.includeTests).toBe(false);
-      expect(parsed.commands['find-strings'].concurrency).toBe(5);
+      expect(parsed.defaults.fileInclude).toEqual([]);
+      expect(parsed.defaults.fileExclude).toEqual([]);
+      expect(parsed.commands['find-matches'].concurrency).toBe(5);
     });
 
     it('parses {gitlab: {}} with empty gitlab block (url deferred to env)', () => {
@@ -79,7 +81,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.defaults).toEqual({
         branch: 'develop',
         excludeRepos: [],
-        includeTests: false,
+        fileInclude: [],
+        fileExclude: [],
         enableLogs: false,
       });
     });
@@ -95,7 +98,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
 
       expect(parsed.defaults.branch).toBe('main');
       expect(parsed.defaults.excludeRepos).toEqual(['archived', 'wip']);
-      expect(parsed.defaults.includeTests).toBe(false);
+      expect(parsed.defaults.fileInclude).toEqual([]);
+      expect(parsed.defaults.fileExclude).toEqual([]);
     });
 
     it('defaults enableLogs to false when defaults block is omitted', () => {
@@ -113,43 +117,43 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.defaults.enableLogs).toBe(true);
     });
 
-    it('applies commands.find-strings.concurrency default = 5', () => {
+    it('applies commands.find-matches.concurrency default = 5', () => {
       const parsed = GitlabAnalyzerConfigSchema.parse({
         gitlab: { url: 'https://gitlab.com' },
       });
 
-      expect(parsed.commands['find-strings'].concurrency).toBe(5);
+      expect(parsed.commands['find-matches'].concurrency).toBe(5);
     });
 
     it('preserves user-provided concurrency', () => {
       const parsed = GitlabAnalyzerConfigSchema.parse({
         gitlab: { url: 'https://gitlab.com' },
-        commands: { 'find-strings': { concurrency: 10 } },
+        commands: { 'find-matches': { concurrency: 10 } },
       });
 
-      expect(parsed.commands['find-strings'].concurrency).toBe(10);
+      expect(parsed.commands['find-matches'].concurrency).toBe(10);
     });
 
-    it('applies inner FindStringsCommandSchema default when commands.find-strings key is missing', () => {
-      // Covers schema-level default on line 30: 'find-strings' is undefined
+    it('applies inner FindMatchesCommandSchema default when commands.find-matches key is missing', () => {
+      // Covers schema-level default on line 30: 'find-matches' is undefined
       // (NOT just individual fields missing — those use field-level defaults).
       const parsed = GitlabAnalyzerConfigSchema.parse({
         gitlab: { url: 'https://gitlab.com' },
-        commands: {}, // 'find-strings' key absent entirely
+        commands: {}, // 'find-matches' key absent entirely
       });
 
-      expect(parsed.commands['find-strings'].concurrency).toBe(5);
+      expect(parsed.commands['find-matches'].concurrency).toBe(5);
     });
 
     it('applies field-level concurrency default when only output is provided', () => {
       // Field-level default on line 18 (concurrency: z.number().int().positive().default(5))
       const parsed = GitlabAnalyzerConfigSchema.parse({
         gitlab: { url: 'https://gitlab.com' },
-        commands: { 'find-strings': { output: './out.json' } },
+        commands: { 'find-matches': { output: './out.json' } },
       });
 
-      expect(parsed.commands['find-strings'].concurrency).toBe(5);
-      expect(parsed.commands['find-strings'].output).toBe('./out.json');
+      expect(parsed.commands['find-matches'].concurrency).toBe(5);
+      expect(parsed.commands['find-matches'].output).toBe('./out.json');
     });
   });
 
@@ -161,14 +165,14 @@ describe('GitlabAnalyzerConfigSchema', () => {
           branch: 'develop',
           repoNameFilter: 'frontend',
           excludeRepos: ['archived-repo', 'wip-repo'],
-          pathFilter: '/src/',
-          includeTests: false,
+          fileInclude: ['**/*.ts'],
+          fileExclude: ['**/*.test.ts'],
           enableLogs: true,
         },
         commands: {
-          'find-strings': {
+          'find-matches': {
             concurrency: 5,
-            output: './find-strings-result.json',
+            output: './find-matches-result.json',
           },
         },
       };
@@ -181,14 +185,14 @@ describe('GitlabAnalyzerConfigSchema', () => {
           branch: 'develop',
           repoNameFilter: 'frontend',
           excludeRepos: ['archived-repo', 'wip-repo'],
-          pathFilter: '/src/',
-          includeTests: false,
+          fileInclude: ['**/*.ts'],
+          fileExclude: ['**/*.test.ts'],
           enableLogs: true,
         },
         commands: {
-          'find-strings': {
+          'find-matches': {
             concurrency: 5,
-            output: './find-strings-result.json',
+            output: './find-matches-result.json',
           },
         },
       });

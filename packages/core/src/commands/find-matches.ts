@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import picomatch from 'picomatch';
 import pLimit from 'p-limit';
 import { getProjectArchive, getProjectRepositorySize } from '../api/project-archive.ts';
 import { getAllProjects } from '../utils/get-projects.ts';
@@ -10,12 +11,35 @@ function mb(bytes: number): string {
 }
 
 /**
- * Input options for {@link findStrings}.
+ * Glob-based file filters applied during the in-archive scan
+ * (see {@link findStrInZip}). Replaces the legacy substring
+ * path-filter + boolean include-tests pair (both removed). Both
+ * arrays default to "no filter" (empty `[]`), so omitting both
+ * options scans EVERY file in every archive.
+ *
+ * - `fileInclude`: glob patterns matched against the archive entry's
+ *   full path (e.g. `/src/foo.ts`). Empty array = no include filter.
+ *   When non-empty, at least one pattern must match for the file to
+ *   be scanned (logical OR between patterns).
+ * - `fileExclude`: glob patterns that force-skip a file
+ *   (gitignore-style: ALWAYS wins over `fileInclude`). Empty array =
+ *   no exclude filter.
+ *
+ * Patterns are interpreted by `picomatch`. Leading slashes in
+ * archive paths are preserved as-is.
+ */
+export type FileFilters = {
+  fileInclude: readonly string[];
+  fileExclude: readonly string[];
+};
+
+/**
+ * Input options for {@link findMatches}.
  *
  * Only `searchStrings` and `branch` are required; everything else falls back
  * to a sensible default documented per field.
  */
-export type FindStringsOptions = {
+export type FindMatchesOptions = {
   /**
    * Strings to search for. A file is considered a match if its content
    * includes ANY of these substrings (logical OR). The `matches` array on
@@ -53,19 +77,28 @@ export type FindStringsOptions = {
   selectedRepos?: readonly RepoInfo[];
 
   /**
-   * Substring filter for file paths inside the archive. Default `'/src/'`.
-   * Real GitLab archives use absolute paths (e.g. `/src/foo.ts`), so the
-   * default matches files under any directory named `src`. Set to `'/'`
-   * to scan every file.
+   * Glob patterns for file paths to SCAN inside each archive
+   * (logical OR between patterns). Empty / `undefined` = no include
+   * filter — every file is a candidate (legacy substring path-filter
+   * with default `/src/` is gone; the new default is "scan all").
+   *
+   * Patterns are interpreted by `picomatch` with default options
+   * (case-sensitive; dotfiles NOT matched). Paths from the archive
+   * keep their leading slash, so a single-segment glob does NOT
+   * match a nested path — use a double-star segment to traverse any
+   * nesting level.
    */
-  pathFilter?: string;
+  fileInclude?: readonly string[];
 
   /**
-   * Whether to include `*.test.*` files in the search. Default `false`.
-   * When `false`, any file whose path contains `.test.ts` is skipped before
-   * the content check.
+   * Glob patterns for file paths to SKIP (logical OR between patterns).
+   * Gitignore-style — ALWAYS wins over `fileInclude`. Empty /
+   * `undefined` = no exclude filter. Replaces the boolean
+   * include-tests flag (the only "negative" filter previously;
+   * `true` meant "skip test files"). Same `picomatch` defaults
+   * as `fileInclude`.
    */
-  includeTests?: boolean;
+  fileExclude?: readonly string[];
 
   /**
    * Maximum number of archive-fetch + zip-parse tasks running in parallel.
@@ -104,7 +137,7 @@ export type FindStringsOptions = {
   onRepoStart?: (repo: string) => void;
 
   /**
-   * Optional pre-loaded project list. When provided, `findStrings` does NOT
+   * Optional pre-loaded project list. When provided, `findMatches` does NOT
    * fetch the project list from GitLab again (skips `getAllProjects`);
    * `repoNameFilter` is then ignored for the fetch (it is assumed to already
    * be applied to `projects`). Filtering by `excludeRepos` and `selectedRepos`
@@ -112,6 +145,30 @@ export type FindStringsOptions = {
    * (e.g. a CLI that built the repo picker) avoid a duplicate network call.
    */
   projects?: readonly SearchProjectsItem[];
+
+  /**
+   * Optional callback fired once per processed repository (both success AND
+   * failure), immediately after `onProgress`. Carries per-repo performance
+   * metrics (download/unzip/scan durations, aggregated file stats, and the
+   * `error` message for a repo whose archive could not be fetched). This is a
+   * separate channel from the `MatchResult` result — it does NOT alter the
+   * returned array or the report shape. `findMatches` remains pure (it only
+   * calls the callback, it never writes output itself).
+   * @param timing - Per-repo performance metrics for the repository that just
+   *   finished processing.
+   */
+  onRepoTiming?: (timing: RepoTiming) => void;
+
+  /**
+   * Optional shared mutable accumulator for run-scope search metrics. When
+   * provided, `findMatches` writes list metrics (into `metrics.list`) and
+   * appends one entry to `metrics.perRepo` for each processed repository (via
+   * {@link onRepoTiming}). Intended for CLIs/mcp servers that want the whole
+   * run's metrics in one place; ordinary library callers can ignore it and use
+   * {@link onRepoTiming} directly. Not part of the public API contract — the
+   * CLI consumes it from `@gitlab-analyzer/core/internal`.
+   */
+  metrics?: SearchMetrics;
 };
 
 /**
@@ -166,54 +223,151 @@ export type MatchResult = {
 type FileMatch = MatchResult['results'][number];
 
 /**
+ * Compiled glob matchers, one per pattern in `FileFilters`. Built once
+ * in `findMatches` (fail-fast on invalid patterns) and reused across
+ * every archive. Internal — not exported.
+ */
+type CompiledFileFilters = {
+  includeMatchers: Array<(path: string) => boolean>;
+  excludeMatchers: Array<(path: string) => boolean>;
+};
+
+/**
+ * Per-repository performance metrics, emitted via {@link FindMatchesOptions.onRepoTiming}.
+ *
+ * Breakdown is per phase: `downloadMs` (archive fetch), `unzipMs` (in-memory
+ * unzip), `scanMs` (the file-content search loop). `totalMs` is the whole repo
+ * (measured from `onRepoStart` to readiness) and is NOT necessarily the sum of
+ * the three phases — there is per-result parsing and external overhead on top.
+ *
+ * Memory is deliberately NOT part of this type: heap is sampled once per RUN
+ * (`totalHeapGrowthBytes`), not per repo.
+ */
+export type RepoTiming = {
+  projectId: number;
+  projectName: string;
+  downloadMs: number;
+  unzipMs: number;
+  scanMs: number;
+  totalMs: number;
+  /** Number of files that passed the filters and were content-scanned. */
+  filesScanned: number;
+  /** Number of scanned files that contained at least one search string. */
+  filesMatched: number;
+  /** UTF-16 code units from `content.length`, not byte count. */
+  textLength: number;
+  /** Set for a repo whose archive could not be fetched. */
+  error?: string;
+};
+
+/**
+ * Run-scope accumulator for search metrics. A single flat mutable record that
+ * `findMatches` fills in place as it runs — `list` from the project-list fetch,
+ * `perRepo` appended per processed repo, `summary` for run-scope heap growth.
+ *
+ * This is an internal (NOT public `index.ts`) type: the CLI consumes it via
+ * `@gitlab-analyzer/core/internal`.
+ */
+export type SearchMetrics = {
+  list: { listMs: number; pagesFetched: number; reposFound: number };
+  /** Grows as repositories finish (same entries as `onRepoTiming`). */
+  perRepo: RepoTiming[];
+  /** Run-scope summary. `totalHeapGrowthBytes` may be negative (GC). */
+  summary: { totalHeapGrowthBytes?: number };
+};
+
+/**
  * Search a single ZIP archive for files containing any of the given search
- * strings, applying the path and test-file filters.
+ * strings, applying the glob-based file filters.
  *
  * @param archive - ZIP archive as `ArrayBuffer` (or `Blob`/`null` for callers
  *   that have not yet converted). `null` yields an empty result.
  * @param searchStrings - Substrings to search for (logical OR).
- * @param filters - `pathFilter` substring and `includeTests` flag.
+ * @param filters - Pre-compiled `CompiledFileFilters` (already built once in
+ *   `findMatches`; this function does NOT recompile). Matchers interpret
+ *   `picomatch` defaults (case-sensitive; dotfiles NOT matched) and run
+ *   against the full archive path, including its leading `/`.
+ * @param metrics - Optional mutable accumulator. Filled with the unzip
+ *   duration, the scan-loop duration, and aggregated per-file counters
+ *   (filesScanned/filesMatched/textLength). Caller is expected to
+ *   pre-initialise the fields to 0; this function only writes when it actually
+ *   measures (e.g. `archive === null` → untouched, stays at the caller's zeroes).
  * @returns Array of `{filename, matches, content}` for every matching file.
  *   On ZIP parse error returns `[]` silently.
  */
-async function findStrInZip(
+export async function findStrInZip(
   archive: Blob | ArrayBuffer | null,
   searchStrings: string[],
-  filters: { pathFilter: string; includeTests: boolean },
+  filters: CompiledFileFilters,
+  metrics?: {
+    unzipMs: number;
+    scanMs: number;
+    filesScanned: number;
+    filesMatched: number;
+    textLength: number;
+  },
 ): Promise<FileMatch[]> {
   if (archive === null) {
     return [];
   }
 
   const results: FileMatch[] = [];
+  let scanMs = 0;
 
   try {
     const zip = new JSZip();
     logger.debug('Распаковка архива… (загрузка zip в память)');
+    const tUnzip = Date.now();
     await zip.loadAsync(archive);
+    if (metrics) metrics.unzipMs = Date.now() - tUnzip;
     logger.debug(`Архив распакован: ${Object.keys(zip.files).length} файлов, ищу подстроки…`);
 
+    const tScan = Date.now();
     for (const [filename, file] of Object.entries(zip.files)) {
       if (file.dir) {
         continue;
       }
-      if (!filename.includes(filters.pathFilter)) {
+
+      // Семантика — решение 8 спеки: пустой include = «всё»; exclude
+      // проверяется всегда (даже когда include пустой). Дефолты picomatch:
+      // case-sensitive, dotfiles НЕ матчатся, ведущий `/` сохраняется.
+      if (
+        filters.includeMatchers.length > 0 &&
+        !filters.includeMatchers.some((m) => m(filename))
+      ) {
         continue;
       }
-      if (!filters.includeTests && filename.includes('.test.ts')) {
+      if (filters.excludeMatchers.some((m) => m(filename))) {
         continue;
       }
 
       const content = await file.async('text');
 
-      if (searchStrings.some((s) => content.includes(s))) {
-        const matches = searchStrings.filter((s) => content.includes(s));
+      // Single pass over the content: compute the matching strings ONCE and
+      // reuse the result for metrics and for building the result record,
+      // instead of re-scanning the content up to 3 times per file.
+      const matched = searchStrings.filter((s) => content.includes(s));
+
+      // Aggregate per-file counters only AFTER the content is decoded (need
+      // `content.length`). textLength is UTF-16 code units, not byte count.
+      if (metrics) {
+        metrics.filesScanned++;
+        metrics.textLength += content.length;
+        if (matched.length > 0) {
+          metrics.filesMatched++;
+        }
+      }
+
+      if (matched.length > 0) {
         const lines = content.split('\n');
-        results.push({ filename, matches, content: lines });
+        results.push({ filename, matches: matched, content: lines });
       }
     }
+    scanMs = Date.now() - tScan;
   } catch {
     return [];
+  } finally {
+    if (metrics) metrics.scanMs = scanMs;
   }
 
   return results;
@@ -246,7 +400,7 @@ async function findStrInZip(
  *
  * @example
  * ```ts
- * const results = await findStrings({
+ * const results = await findMatches({
  *   searchStrings: ['my-secret', 'TODO'],
  *   branch: 'develop',
  *   concurrency: 5,
@@ -260,17 +414,25 @@ async function findStrInZip(
  * console.log(`Found ${totalMatches} matches across ${results.length} repos`);
  * ```
  */
-export async function findStrings(opts: FindStringsOptions): Promise<MatchResult[]> {
+export async function findMatches(opts: FindMatchesOptions): Promise<MatchResult[]> {
   const searchStrings = opts.searchStrings;
   const branch = opts.branch;
-  const pathFilter = opts.pathFilter ?? '/src/';
-  const includeTests = opts.includeTests ?? false;
+  const fileInclude = opts.fileInclude ?? [];
+  const fileExclude = opts.fileExclude ?? [];
   const excludeRepos = opts.excludeRepos ?? [];
   const selectedRepos = opts.selectedRepos;
 
+  // picomatch вызывается с дефолтными опциями (per spec decision 8 / MUST NOT DO).
+  // Валидация паттернов — out of scope: picomatch ленивый и не бросает на
+  // кривых паттернах (compile и match оба молча проглатывают).
+  const compiledFilters: CompiledFileFilters = {
+    includeMatchers: fileInclude.map((p) => picomatch(p)),
+    excludeMatchers: fileExclude.map((p) => picomatch(p)),
+  };
+
   const allProjects =
     opts.projects ??
-    (await getAllProjects(opts.repoNameFilter ?? ''));
+    (await getAllProjects(opts.repoNameFilter ?? '', opts.metrics?.list));
   const projects = allProjects.filter(
     (project): project is SearchProjectsItem & { name: string } =>
       project.name !== null &&
@@ -282,6 +444,25 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
         )),
   );
 
+  // Приоритизация по размеру: мелкие репо обрабатываем первыми, гигантов
+  // оставляем на хвост очереди, чтобы они не удерживали слоты p-limit,
+  // пока мелкие ещё работают (эмпирически: ~25–30с экономии wall-time на
+  // 100+ репо, см. метрики metrics-1.ndjson).
+  //
+  // repository_size === undefined или null трактуем как 0 (неизвестный
+  // размер не откладываем — иначе такие репо могут «спрятаться» за
+  // гигантами в хвосте; мы их всё равно обработаем, пусть идут первыми).
+  //
+  // Array.prototype.sort в V8 — стабильный (Timsort): для равных размеров
+  // сохраняется порядок от API GitLab (`order_by: 'name', sort: 'asc'`).
+  projects.sort((a, b) => {
+    const sa = a.statistics?.repository_size ?? 0;
+    const sb = b.statistics?.repository_size ?? 0;
+    return sa - sb;
+  });
+  if (projects.every((p) => p.statistics?.repository_size == null))
+    logger.warn('нет statistics.repository_size (токен без прав Reporter+?): приоритизация по размеру не сработает');
+
   const total = projects.length;
   let done = 0;
   const limit = pLimit(opts.concurrency ?? 5);
@@ -289,12 +470,20 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
   const tasks = projects.map((project) => limit(async (): Promise<MatchResult | null> => {
     opts.onRepoStart?.(project.name);
     logger.debug(`Скачивание архива: ${project.name} (id=${project.id}, branch=${branch})…`);
-    let archive: Blob | ArrayBuffer | null;
+
+    // Per-repo timing: local accumulators (not `opts.metrics.perRepo`), so a
+    // failed repo doesn't leak partial data into `metrics.perRepo` — the full
+    // RepoTiming is appended once at the end for BOTH success and failure.
+    const t0 = performance.now();
+    const archMetrics = { downloadMs: 0 };
+    const zipMetrics = { unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0 };
+    let archive: Blob | ArrayBuffer | null = null;
     let errorMsg: string | undefined;
     try {
       archive = await getProjectArchive(project.id, {
         projectName: project.name,
         branch,
+        metrics: archMetrics,
       });
       if (archive === null) {
         // Compatibility path: callers that still return `null` (instead of
@@ -305,6 +494,25 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
       archive = null;
       errorMsg = err instanceof Error ? err.message : String(err);
     }
+
+    let fileMatches: FileMatch[] = [];
+    if (errorMsg === undefined && archive !== null) {
+      fileMatches = await findStrInZip(archive, searchStrings, compiledFilters, zipMetrics);
+    }
+
+    // Build the per-repo timing regardless of success/failure.
+    const timing: RepoTiming = {
+      projectId: project.id,
+      projectName: project.name,
+      downloadMs: archMetrics.downloadMs,
+      unzipMs: zipMetrics.unzipMs,
+      scanMs: zipMetrics.scanMs,
+      totalMs: performance.now() - t0,
+      filesScanned: zipMetrics.filesScanned,
+      filesMatched: zipMetrics.filesMatched,
+      textLength: zipMetrics.textLength,
+      ...(errorMsg !== undefined ? { error: errorMsg } : {}),
+    };
 
     if (errorMsg !== undefined) {
       logger.warn(`Архив не получен: ${project.name} (${errorMsg})`);
@@ -322,17 +530,18 @@ export async function findStrings(opts: FindStringsOptions): Promise<MatchResult
           }
         });
       }
+      // Emit per-repo timing for the failed repo too (downloadMs ≈ timeout).
+      opts.onRepoTiming?.(timing);
+      opts.metrics?.perRepo.push(timing);
       return null;
     }
-
-    const fileMatches = await findStrInZip(archive, searchStrings, {
-      pathFilter,
-      includeTests,
-    });
 
     logger.success(`Готово: ${project.name} (${fileMatches.length} файл(ов) с совпадениями)`);
     done++;
     opts.onProgress?.(done, total, project.name);
+
+    opts.onRepoTiming?.(timing);
+    opts.metrics?.perRepo.push(timing);
 
     return {
       projectId: project.id,

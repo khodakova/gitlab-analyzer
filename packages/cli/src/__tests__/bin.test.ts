@@ -17,13 +17,13 @@ const binBuilt = existsSync(cliDist);
  * validates the built artifact rather than unit-level logic.
  */
 describe.skipIf(!binBuilt)('gitlab-analyzer bin wiring', () => {
-  it('--help exits 0 and advertises the find-strings command', async () => {
+  it('--help exits 0 and advertises the find-matches command', async () => {
     const { stdout, stderr } = await execFileAsync(process.execPath, [
       cliDist,
       '--help',
     ]);
     const out = `${stdout}\n${stderr}`;
     expect(out).toContain('gitlab-analyzer');
-    expect(out).toContain('find-strings');
+    expect(out).toContain('find-matches');
   });
 });

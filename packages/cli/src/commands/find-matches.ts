@@ -2,12 +2,13 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { green, yellow } from 'colorette';
 import {
-  findStrings,
+  findMatches,
   loadConfig,
   configureLogger,
   logger,
   flushLogs,
-  type FindStringsOptions,
+  formatDuration,
+  type FindMatchesOptions,
   type MatchResult,
   type RepoInfo,
 } from '@gitlab-analyzer/core';
@@ -15,12 +16,14 @@ import {
   axiosInstance,
   getAllProjects,
   type SearchProjectsItem,
+  type SearchMetrics,
+  type RepoTiming,
 } from '@gitlab-analyzer/core/internal';
 import { repoSelect } from '../utils/repo-select.ts';
 import { progress, report, renderProgressFrame } from '../utils/progress.ts';
 import {
   resolveOptions,
-  type FindStringsCliOptions,
+  type FindMatchesCliOptions,
 } from '../utils/options.ts';
 import {
   assertFormatPathConsistency,
@@ -46,10 +49,13 @@ import {
  *   any source, or when `--format` conflicts with an explicit `--output`
  *   path extension.
  */
-export async function runFindStrings(
+export async function runFindMatches(
   strings: string[],
-  opts: FindStringsCliOptions,
+  opts: FindMatchesCliOptions,
 ): Promise<{ report: Report; outputPath: string | undefined }> {
+  // Run-scope timing anchor. Must be the FIRST statement so totalWallMs
+  // captures the whole run (config load, list fetch, search, report write).
+  const startedAt = new Date();
   const config = await loadConfig();
   const resolution = resolveOptions(strings, opts, config);
 
@@ -58,7 +64,7 @@ export async function runFindStrings(
       .map((e) => `  - ${e.field}: ${e.message}`)
       .join('\n');
     throw new Error(
-      `Cannot run find-strings — missing required options:\n${lines}`,
+      `Cannot run find-matches — missing required options:\n${lines}`,
     );
   }
 
@@ -84,11 +90,11 @@ export async function runFindStrings(
   axiosInstance.defaults.baseURL = resolved.gitlabUrl;
 
   // Resolve the repository set (already filtered by excludeRepos — this must
-  // mirror findStrings' filter so the picker / printed list matches what will
-  // actually be searched). This list is ALSO handed to `findStrings` via
+  // mirror findMatches' filter so the picker / printed list matches what will
+  // actually be searched). This list is ALSO handed to `findMatches` via
   // `projects` so it does not re-fetch the project list (avoiding a duplicate
   // API call and a duplicated "Найдено репозиториев" debug line). Kept pure:
-  // findStrings still does its own exclude/selected filtering on top.
+  // findMatches still does its own exclude/selected filtering on top.
   //
   // Fetching the repo list can take a while — `getAllProjects` walks every
   // page of the GitLab projects API before any per-repo work begins, and
@@ -101,15 +107,121 @@ export async function runFindStrings(
     progress.spin('Получение списка репозиториев…');
   }, 150);
 
+  // Run-scope metrics accumulator (SearchMetrics, from core/internal). Filled
+  // by findMatches (list + per-repo) and by this CLI (run-scope heap growth).
+  // Memory is sampled once before the list fetch and once at the end — the
+  // difference (totalHeapGrowthBytes) may be negative after GC.
+  const metrics: SearchMetrics = {
+    list: { listMs: 0, pagesFetched: 0, reposFound: 0 },
+    perRepo: [],
+    summary: {},
+  };
+  const heapBefore = process.memoryUsage().heapUsed;
+
   let allProjects: SearchProjectsItem[];
   try {
     logger.info(`Получение списка репозиториев (repoNameFilter='${resolved.repoNameFilter ?? ''}')…`);
-    allProjects = await getAllProjects(resolved.repoNameFilter);
+    allProjects = await getAllProjects(resolved.repoNameFilter, metrics.list);
     logger.info(`Список репозиториев получен: ${allProjects.length}`);
   } finally {
     clearInterval(fetchReposTimer);
     progress.clear();
   }
+
+  /**
+   * Write the `--metrics-file` NDJSON (run / one-repo-per-line / summary) and
+   * print the stderr metrics summary. Call on every normal exit of
+   * `runFindMatches`: `complete` (after the report is written), `cancel`
+   * (interactive empty selection) and `no-repos` (headless zero-repo guard).
+   * A write error is a warning, never fatal — the report is already written.
+   */
+  const writeSummaryRecord = async (
+    reason: 'complete' | 'cancel' | 'no-repos',
+  ): Promise<void> => {
+    const heapAfter = process.memoryUsage().heapUsed;
+    const totalHeapGrowthBytes = heapAfter - heapBefore;
+    metrics.summary.totalHeapGrowthBytes = totalHeapGrowthBytes;
+
+    const totalWallMs = Date.now() - startedAt.getTime();
+    const repoRows = metrics.perRepo;
+    const totalPerRepoMs = repoRows.reduce((acc, t) => acc + t.totalMs, 0);
+    const repos = repoRows.length;
+    const ok = repoRows.filter((t) => t.error === undefined).length;
+    const errored = repos - ok;
+    const max = repoRows.reduce<RepoTiming | undefined>(
+      (acc, t) => (acc === undefined || t.totalMs > acc.totalMs ? t : acc),
+      undefined,
+    );
+
+    // stderr metrics summary (compact run-level aggregates; no per-repo detail).
+    if (repos > 0) {
+      const avgRepoMs = repos > 0 ? totalPerRepoMs / repos : 0;
+      const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
+      progress.static(
+        `Metrics: ${repos} repos · list ${formatDuration(metrics.list.listMs)} (${metrics.list.pagesFetched} pg, ${metrics.list.reposFound} repos) · total ${formatDuration(totalWallMs)} · avg ${formatDuration(avgRepoMs)} · max ${max?.projectName ?? '-'} (${formatDuration(max?.totalMs ?? 0)}) · heap Δ${heapMb} MB`,
+      );
+    } else {
+      const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
+      progress.static(
+        `Metrics: exit=${reason} · list ${formatDuration(metrics.list.listMs)} · total ${formatDuration(totalWallMs)} · heap Δ${heapMb} MB`,
+      );
+    }
+
+    if (!resolved.metricsFile) {
+      return;
+    }
+
+    const runRecord = {
+      t: 'run',
+      exitReason: reason,
+      listMs: metrics.list.listMs,
+      pagesFetched: metrics.list.pagesFetched,
+      reposFound: metrics.list.reposFound,
+      totalWallMs,
+      totalPerRepoMs,
+      startedAt: startedAt.toISOString(),
+      finishedAt: new Date().toISOString(),
+    };
+    const repoRecords = repoRows.map((t) => ({
+      t: 'repo',
+      projectId: t.projectId,
+      projectName: t.projectName,
+      downloadMs: t.downloadMs,
+      unzipMs: t.unzipMs,
+      scanMs: t.scanMs,
+      totalMs: t.totalMs,
+      filesScanned: t.filesScanned,
+      filesMatched: t.filesMatched,
+      textLength: t.textLength,
+      error: t.error ?? null,
+    }));
+    const summaryRecord = {
+      t: 'summary',
+      exitReason: reason,
+      repos,
+      ok,
+      errored,
+      totalWallMs,
+      totalPerRepoMs,
+      avgRepoMs: repos > 0 ? totalPerRepoMs / repos : 0,
+      maxRepoMs: max?.totalMs ?? 0,
+      maxRepoName: max?.projectName ?? null,
+      totalHeapGrowthBytes,
+    };
+
+    const lines = [runRecord, ...repoRecords, summaryRecord].map((r) =>
+      JSON.stringify(r),
+    );
+    try {
+      await mkdir(dirname(resolved.metricsFile), { recursive: true });
+      await writeFile(resolved.metricsFile, `${lines.join('\n')}\n`, 'utf-8');
+    } catch (err) {
+      logger.warn(
+        `Не удалось записать файл метрик (${resolved.metricsFile}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
   const excludeList = resolved.excludeRepos;
   const filtered = allProjects.filter(
     (project) =>
@@ -127,6 +239,7 @@ export async function runFindStrings(
     selectedRepos = await repoSelect(repos);
 
     if (selectedRepos.length === 0) {
+      await writeSummaryRecord('cancel');
       report('Поиск отменён: не выбрано ни одного репозитория.');
       await flushLogs();
       process.exit(0);
@@ -137,6 +250,7 @@ export async function runFindStrings(
     // the filter/exclusions simply matched nothing.
     if (repos.length === 0) {
       logger.info('Репозитории не найдены: фильтр/исключения не дали результатов.');
+      await writeSummaryRecord('no-repos');
       await flushLogs();
       process.exit(0);
     }
@@ -151,7 +265,7 @@ export async function runFindStrings(
 
   // Per-repo error map, fed by onProgress's new `error` argument. Each repo is
   // keyed by name so we can correlate the error with the matching report entry
-  // and the search results returned by findStrings (which omits errored repos).
+  // and the search results returned by findMatches (which omits errored repos).
   const repoErrors = new Map<string, string>();
 
   // Most recently *started* repo, fed by the `onRepoStart` hook. Analysis is
@@ -164,7 +278,7 @@ export async function runFindStrings(
   // given repo incrementing `done`) can render `Обработано N из M` using the
   // latest values reported by `onProgress` (whose `done`/`total` live inside its
   // closure). Initialised to the repo count this run processes — mirrors
-  // findStrings' `total`, computed from the resolved/selected repo set.
+  // findMatches' `total`, computed from the resolved/selected repo set.
   const doneRef = { current: 0 };
   const scannedCount = selectedRepos?.length ?? repos.length;
   const totalRef = { current: scannedCount };
@@ -180,16 +294,17 @@ export async function runFindStrings(
     progress.spin(currentFrame());
   }, 150);
 
-  const findOpts: FindStringsOptions = {
+  const findOpts: FindMatchesOptions = {
     searchStrings: strings,
     branch: resolved.branch,
     repoNameFilter: resolved.repoNameFilter,
     excludeRepos: resolved.excludeRepos,
     selectedRepos,
     projects: filtered,
-    pathFilter: resolved.pathFilter,
-    includeTests: resolved.includeTests,
+    fileInclude: resolved.fileInclude,
+    fileExclude: resolved.fileExclude,
     concurrency: resolved.concurrency,
+    metrics,
     onRepoStart: (repo) => {
       lastStartedRepo = repo;
       progress.spin(currentFrame());
@@ -215,7 +330,7 @@ export async function runFindStrings(
   let results: MatchResult[];
   try {
     logger.info(`Начинаю поиск по ${scannedCount} репозиториям… (concurrency=${resolved.concurrency})`);
-    results = await findStrings(findOpts);
+    results = await findMatches(findOpts);
     logger.success('Поиск завершён.');
   } finally {
     // Always stop the spinner timer — both on the normal path (where
@@ -278,9 +393,16 @@ export async function runFindStrings(
 
   const report2 = buildReport(resolved, strings, repositories);
 
+  // E.14 — total files that passed both filters across all repos; fed to
+  // renderReportTxt for the stdout-only "проанализировано файлов: N" line.
+  const totalFilesScanned = metrics.perRepo.reduce(
+    (acc, t) => acc + t.filesScanned,
+    0,
+  );
+
   const payload =
     resolved.format === 'txt'
-      ? renderReportTxt(report2)
+      ? renderReportTxt(report2, totalFilesScanned)
       : JSON.stringify(report2, null, 2);
 
   // Resolve the target file: explicit --output, else auto name with
@@ -312,6 +434,10 @@ export async function runFindStrings(
   if (outputPath) {
     progress.static(green(`✓ Отчёт: ${outputPath}`));
   }
+
+  // Metrics summary (stderr) + optional --metrics-file write, at the normal
+  // end of the run.
+  await writeSummaryRecord('complete');
 
   if (resolved.stdout) {
     process.stdout.write(`${payload}\n`);
