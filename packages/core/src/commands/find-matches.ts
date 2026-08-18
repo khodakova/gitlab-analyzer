@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import picomatch from 'picomatch';
 import pLimit from 'p-limit';
 import { getProjectArchive, getProjectRepositorySize } from '../api/project-archive.ts';
 import { getAllProjects } from '../utils/get-projects.ts';
@@ -8,6 +9,29 @@ import type { SearchProjectsItem, RepoInfo } from '../types.ts';
 function mb(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/**
+ * Glob-based file filters applied during the in-archive scan
+ * (see {@link findStrInZip}). Replaces the legacy substring
+ * path-filter + boolean include-tests pair (both removed). Both
+ * arrays default to "no filter" (empty `[]`), so omitting both
+ * options scans EVERY file in every archive.
+ *
+ * - `fileInclude`: glob patterns matched against the archive entry's
+ *   full path (e.g. `/src/foo.ts`). Empty array = no include filter.
+ *   When non-empty, at least one pattern must match for the file to
+ *   be scanned (logical OR between patterns).
+ * - `fileExclude`: glob patterns that force-skip a file
+ *   (gitignore-style: ALWAYS wins over `fileInclude`). Empty array =
+ *   no exclude filter.
+ *
+ * Patterns are interpreted by `picomatch`. Leading slashes in
+ * archive paths are preserved as-is.
+ */
+export type FileFilters = {
+  fileInclude: readonly string[];
+  fileExclude: readonly string[];
+};
 
 /**
  * Input options for {@link findMatches}.
@@ -53,19 +77,28 @@ export type FindMatchesOptions = {
   selectedRepos?: readonly RepoInfo[];
 
   /**
-   * Substring filter for file paths inside the archive. Default `'/src/'`.
-   * Real GitLab archives use absolute paths (e.g. `/src/foo.ts`), so the
-   * default matches files under any directory named `src`. Set to `'/'`
-   * to scan every file.
+   * Glob patterns for file paths to SCAN inside each archive
+   * (logical OR between patterns). Empty / `undefined` = no include
+   * filter — every file is a candidate (legacy substring path-filter
+   * with default `/src/` is gone; the new default is "scan all").
+   *
+   * Patterns are interpreted by `picomatch` with default options
+   * (case-sensitive; dotfiles NOT matched). Paths from the archive
+   * keep their leading slash, so a single-segment glob does NOT
+   * match a nested path — use a double-star segment to traverse any
+   * nesting level.
    */
-  pathFilter?: string;
+  fileInclude?: readonly string[];
 
   /**
-   * Whether to include `*.test.*` files in the search. Default `false`.
-   * When `false`, any file whose path contains `.test.ts` is skipped before
-   * the content check.
+   * Glob patterns for file paths to SKIP (logical OR between patterns).
+   * Gitignore-style — ALWAYS wins over `fileInclude`. Empty /
+   * `undefined` = no exclude filter. Replaces the boolean
+   * include-tests flag (the only "negative" filter previously;
+   * `true` meant "skip test files"). Same `picomatch` defaults
+   * as `fileInclude`.
    */
-  includeTests?: boolean;
+  fileExclude?: readonly string[];
 
   /**
    * Maximum number of archive-fetch + zip-parse tasks running in parallel.
@@ -190,6 +223,16 @@ export type MatchResult = {
 type FileMatch = MatchResult['results'][number];
 
 /**
+ * Compiled glob matchers, one per pattern in `FileFilters`. Built once
+ * in `findMatches` (fail-fast on invalid patterns) and reused across
+ * every archive. Internal — not exported.
+ */
+type CompiledFileFilters = {
+  includeMatchers: Array<(path: string) => boolean>;
+  excludeMatchers: Array<(path: string) => boolean>;
+};
+
+/**
  * Per-repository performance metrics, emitted via {@link FindMatchesOptions.onRepoTiming}.
  *
  * Breakdown is per phase: `downloadMs` (archive fetch), `unzipMs` (in-memory
@@ -235,12 +278,15 @@ export type SearchMetrics = {
 
 /**
  * Search a single ZIP archive for files containing any of the given search
- * strings, applying the path and test-file filters.
+ * strings, applying the glob-based file filters.
  *
  * @param archive - ZIP archive as `ArrayBuffer` (or `Blob`/`null` for callers
  *   that have not yet converted). `null` yields an empty result.
  * @param searchStrings - Substrings to search for (logical OR).
- * @param filters - `pathFilter` substring and `includeTests` flag.
+ * @param filters - Pre-compiled `CompiledFileFilters` (already built once in
+ *   `findMatches`; this function does NOT recompile). Matchers interpret
+ *   `picomatch` defaults (case-sensitive; dotfiles NOT matched) and run
+ *   against the full archive path, including its leading `/`.
  * @param metrics - Optional mutable accumulator. Filled with the unzip
  *   duration, the scan-loop duration, and aggregated per-file counters
  *   (filesScanned/filesMatched/textLength). Caller is expected to
@@ -252,7 +298,7 @@ export type SearchMetrics = {
 export async function findStrInZip(
   archive: Blob | ArrayBuffer | null,
   searchStrings: string[],
-  filters: { pathFilter: string; includeTests: boolean },
+  filters: CompiledFileFilters,
   metrics?: {
     unzipMs: number;
     scanMs: number;
@@ -281,10 +327,17 @@ export async function findStrInZip(
       if (file.dir) {
         continue;
       }
-      if (!filename.includes(filters.pathFilter)) {
+
+      // Семантика — решение 8 спеки: пустой include = «всё»; exclude
+      // проверяется всегда (даже когда include пустой). Дефолты picomatch:
+      // case-sensitive, dotfiles НЕ матчатся, ведущий `/` сохраняется.
+      if (
+        filters.includeMatchers.length > 0 &&
+        !filters.includeMatchers.some((m) => m(filename))
+      ) {
         continue;
       }
-      if (!filters.includeTests && filename.includes('.test.ts')) {
+      if (filters.excludeMatchers.some((m) => m(filename))) {
         continue;
       }
 
@@ -364,10 +417,18 @@ export async function findStrInZip(
 export async function findMatches(opts: FindMatchesOptions): Promise<MatchResult[]> {
   const searchStrings = opts.searchStrings;
   const branch = opts.branch;
-  const pathFilter = opts.pathFilter ?? '/src/';
-  const includeTests = opts.includeTests ?? false;
+  const fileInclude = opts.fileInclude ?? [];
+  const fileExclude = opts.fileExclude ?? [];
   const excludeRepos = opts.excludeRepos ?? [];
   const selectedRepos = opts.selectedRepos;
+
+  // picomatch вызывается с дефолтными опциями (per spec decision 8 / MUST NOT DO).
+  // Валидация паттернов — out of scope: picomatch ленивый и не бросает на
+  // кривых паттернах (compile и match оба молча проглатывают).
+  const compiledFilters: CompiledFileFilters = {
+    includeMatchers: fileInclude.map((p) => picomatch(p)),
+    excludeMatchers: fileExclude.map((p) => picomatch(p)),
+  };
 
   const allProjects =
     opts.projects ??
@@ -436,7 +497,7 @@ export async function findMatches(opts: FindMatchesOptions): Promise<MatchResult
 
     let fileMatches: FileMatch[] = [];
     if (errorMsg === undefined && archive !== null) {
-      fileMatches = await findStrInZip(archive, searchStrings, { pathFilter, includeTests }, zipMetrics);
+      fileMatches = await findStrInZip(archive, searchStrings, compiledFilters, zipMetrics);
     }
 
     // Build the per-repo timing regardless of success/failure.

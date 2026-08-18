@@ -16,15 +16,17 @@ import type { GitlabAnalyzerConfig } from '@gitlab-analyzer/core/internal';
  *      typically populated by `.env` via dotenv)
  *   3. `gitlab-analyzer.json` config file (`defaults.*`,
  *      `commands.find-matches.*`, `gitlab.url`)
- *   4. Built-in default (`'develop'` for branch, `/src/` for path filter,
- *      `false` for includeTests, `5` for concurrency, etc.)
+ *   4. Built-in default (`'develop'` for branch, `[]` for fileInclude /
+ *      fileExclude, `5` for concurrency, etc.)
  */
 export type FindMatchesCliOptions = {
   repoFilter?: string;
   exclude?: string[];
   branch?: string;
-  pathFilter?: string;
-  includeTests?: boolean;
+  /** Glob patterns to SCAN (commander returns string[] from comma-split). */
+  fileInclude?: string[];
+  /** Glob patterns to SKIP (commander returns string[] from comma-split). */
+  fileExclude?: string[];
   output?: string;
   concurrency?: number;
   interactive?: boolean;
@@ -48,10 +50,10 @@ export type ResolvedFindMatchesOptions = {
   repoNameFilter: string | undefined;
   /** Project names to skip. */
   excludeRepos: string[];
-  /** Substring filter for file paths inside each archive. */
-  pathFilter: string;
-  /** Whether to include `*.test.*` files. */
-  includeTests: boolean;
+  /** Glob patterns for file paths to SCAN. Always an array (empty = scan all). */
+  fileInclude: string[];
+  /** Glob patterns for file paths to SKIP (gitignore-style). Always an array. */
+  fileExclude: string[];
   /** Max parallel archive-fetch + zip-parse tasks. */
   concurrency: number;
   /** Output file path; `undefined` → auto-generated name. */
@@ -159,9 +161,10 @@ export function resolveOptions(
       cliOpts.repoFilter ?? config.defaults?.repoNameFilter,
     excludeRepos:
       cliOpts.exclude ?? config.defaults?.excludeRepos ?? [],
-    pathFilter: cliOpts.pathFilter ?? config.defaults?.pathFilter ?? '/src/',
-    includeTests:
-      cliOpts.includeTests ?? config.defaults?.includeTests ?? false,
+    fileInclude:
+      cliOpts.fileInclude ?? config.defaults?.fileInclude ?? [],
+    fileExclude:
+      cliOpts.fileExclude ?? config.defaults?.fileExclude ?? [],
     concurrency:
       cliOpts.concurrency ?? cmdDefaults?.concurrency ?? 5,
     output: cliOpts.output ?? cmdDefaults?.output,

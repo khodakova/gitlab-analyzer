@@ -74,8 +74,8 @@ gitlab-analyzer find-matches [options] <strings...>
 | `-r, --repo-filter <str>` | Substring filter for project names (passed to GitLab `search=`) | — |
 | `-e, --exclude <list>` | Comma-separated repo names to skip | `[]` |
 | `-b, --branch <name>` | Branch to scan in every project | `develop` |
-| `-p, --path-filter <str>` | Substring filter for file paths inside the archive | `/src/` |
-| `--include-tests` | Include `*.test.*` files in the search | off |
+| `--file-include <list>` | Comma-separated glob patterns; only files matching at least one pattern are scanned | `[]` (scan all) |
+| `--file-exclude <list>` | Comma-separated glob patterns; matching files are always skipped (wins over `--file-include`) | `[]` |
 | `--format <txt\|json>` | Report format (also drives the file extension) | `json` |
 | `--stdout` | Also write the report to stdout (handy for piping) | off |
 | `-o, --output <path>` | Where to write the report; omit for an auto-generated name | auto-name |
@@ -102,10 +102,10 @@ gitlab-analyzer find-matches 'TODO' 'FIXME' \
   --branch develop \
   -o ./results/find-matches.json
 
-# Scan everything (tests + all paths) to one file
+# Scan everything (all paths, including tests) to one file
 gitlab-analyzer find-matches 'legacy-sdk' \
-  --path-filter '/' \
-  --include-tests \
+  --file-include '**/*' \
+  --file-exclude 'dist/**,node_modules/**' \
   --format json -o results.json
 
 # Report straight to stdout for jq (no file written)
@@ -157,7 +157,7 @@ Option resolution precedence (highest wins):
 1. CLI flag                  e.g. --branch main
 2. Environment variable      GITLAB_URL, PRIVATE_TOKEN (usually from .env)
 3. gitlab-analyzer.json      defaults.*, commands.find-matches.*, gitlab.url
-4. Built-in default          branch="develop", pathFilter="/src/", concurrency=5
+4. Built-in default          branch="develop", concurrency=5, fileInclude=[], fileExclude=[]
 ```
 
 A config is useful for **persistent, non-secret** values (branch, exclusions, concurrency, output path). **Never** put tokens in a config — env only.
@@ -169,8 +169,8 @@ A config is useful for **persistent, non-secret** values (branch, exclusions, co
     "branch": "develop",
     "repoNameFilter": "frontend",
     "excludeRepos": ["archived-repo", "wip-repo"],
-    "pathFilter": "/src/",
-    "includeTests": false
+    "fileInclude": [],
+    "fileExclude": []
   },
   "commands": {
     "find-matches": {
@@ -187,8 +187,8 @@ A config is useful for **persistent, non-secret** values (branch, exclusions, co
 | `defaults.branch` | `"develop"` | Branch to scan |
 | `defaults.repoNameFilter` | — | Substring filter for repo names |
 | `defaults.excludeRepos` | `[]` | Repos to skip |
-| `defaults.pathFilter` | `"/src/"` | Substring filter for file paths |
-| `defaults.includeTests` | `false` | Include `*.test.*` |
+| `defaults.fileInclude` | `[]` | Glob patterns; only matching files are scanned |
+| `defaults.fileExclude` | `[]` | Glob patterns; matching files are always skipped (wins over `fileInclude`) |
 | `defaults.enableLogs` | `false` | Enable debug logging |
 | `commands.find-matches.concurrency` | `5` | Parallel requests |
 | `commands.find-matches.output` | — | Report path |
@@ -265,8 +265,20 @@ file is a warning on stderr, never a fatal error — the report is already writt
 
 ## Good to know
 
-- **No matches but the string is definitely there?** The default `--path-filter /src/` skips files outside `src`. Scan everything: `--path-filter '/'`.
-- **Tests are excluded by default** — add `--include-tests`.
+- **No matches but the string is definitely there?** The default scan includes every file. Narrow it down with `--file-include '**/src/**'` (or whatever path you care about); widen it explicitly only if you've set a default in your config that excludes too much.
+- **Tests are scanned by default** — exclude them with `--file-exclude '**/*.test.ts'`.
+
+### Common glob patterns
+
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`), so patterns must account for that leading slash.
+
+| Need | Pattern |
+|---|---|
+| Find test files | `**/*.test.*` |
+| Find a file by its exact name (anywhere) | `**/foo.ts` |
+| Find any `.ts` file | `**/*.ts` |
+| Find files only under `src/` | `**/src/**/*.ts` |
+| Skip node_modules | `**/node_modules/**` |
 - **Too many requests on a big instance?** Lower `--concurrency 2`.
 - **401 Unauthorized** — check `PRIVATE_TOKEN` (needs `read_api` scope).
 - Tokens are read **only** from env vars / `.env` — never from config.

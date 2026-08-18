@@ -301,8 +301,8 @@ export async function runFindMatches(
     excludeRepos: resolved.excludeRepos,
     selectedRepos,
     projects: filtered,
-    pathFilter: resolved.pathFilter,
-    includeTests: resolved.includeTests,
+    fileInclude: resolved.fileInclude,
+    fileExclude: resolved.fileExclude,
     concurrency: resolved.concurrency,
     metrics,
     onRepoStart: (repo) => {
@@ -393,9 +393,16 @@ export async function runFindMatches(
 
   const report2 = buildReport(resolved, strings, repositories);
 
+  // E.14 — total files that passed both filters across all repos; fed to
+  // renderReportTxt for the stdout-only "проанализировано файлов: N" line.
+  const totalFilesScanned = metrics.perRepo.reduce(
+    (acc, t) => acc + t.filesScanned,
+    0,
+  );
+
   const payload =
     resolved.format === 'txt'
-      ? renderReportTxt(report2)
+      ? renderReportTxt(report2, totalFilesScanned)
       : JSON.stringify(report2, null, 2);
 
   // Resolve the target file: explicit --output, else auto name with

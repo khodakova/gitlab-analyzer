@@ -55,7 +55,8 @@ const defaultConfig = () => ({
   defaults: {
     branch: 'develop',
     excludeRepos: [],
-    includeTests: false,
+    fileInclude: [],
+    fileExclude: [],
   },
   commands: {
     'find-matches': { concurrency: 5 },
@@ -107,7 +108,8 @@ describe('runFindMatches (exported helper)', () => {
       defaults: {
         branch: 'main',
         excludeRepos: ['archive'],
-        includeTests: false,
+        fileInclude: [],
+        fileExclude: [],
       },
       commands: { 'find-matches': { concurrency: 10 } },
     });
@@ -119,8 +121,8 @@ describe('runFindMatches (exported helper)', () => {
       branch: 'develop', // CLI override
       repoFilter: 'frontend',
       exclude: ['wip'], // CLI override
-      pathFilter: '/lib/',
-      includeTests: true,
+      fileInclude: ['**/*.ts'],
+      fileExclude: ['**/*.test.ts'],
       concurrency: 3, // CLI override
     });
 
@@ -147,8 +149,8 @@ describe('runFindMatches (exported helper)', () => {
         branch: 'develop', // CLI wins over config
         repoNameFilter: 'frontend',
         excludeRepos: ['wip'], // CLI wins over config
-        pathFilter: '/lib/',
-        includeTests: true,
+        fileInclude: ['**/*.ts'],
+        fileExclude: ['**/*.test.ts'],
         concurrency: 3, // CLI wins over config (10)
       }),
     );
@@ -161,8 +163,8 @@ describe('runFindMatches (exported helper)', () => {
         branch: 'develop',
         repoNameFilter: 'backend',
         excludeRepos: ['skip-me'],
-        pathFilter: '/app/',
-        includeTests: false,
+        fileInclude: ['**/app/**'],
+        fileExclude: [],
       },
       commands: { 'find-matches': { concurrency: 7 } },
     });
@@ -179,9 +181,31 @@ describe('runFindMatches (exported helper)', () => {
         branch: 'develop',
         repoNameFilter: 'backend',
         excludeRepos: ['skip-me'],
-        pathFilter: '/app/',
-        includeTests: false,
+        fileInclude: ['**/app/**'],
+        fileExclude: [],
         concurrency: 7,
+      }),
+    );
+  });
+
+  it('forwards empty fileInclude/fileExclude as [] when both CLI and config are silent', async () => {
+    mocks.loadConfig.mockResolvedValue({
+      gitlab: { url: 'https://gitlab.example.com' },
+      defaults: {},
+      commands: { 'find-matches': {} },
+    });
+
+    mocks.findMatches.mockResolvedValue([]);
+    mocks.writeFile.mockResolvedValue(undefined);
+
+    await runFindMatches(['x'], {});
+
+    expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+    expect(mocks.findMatches).toHaveBeenCalledWith(
+      expect.objectContaining({
+        searchStrings: ['x'],
+        fileInclude: [],
+        fileExclude: [],
       }),
     );
   });
@@ -192,7 +216,8 @@ describe('runFindMatches (exported helper)', () => {
       defaults: {
         branch: 'develop',
         excludeRepos: [],
-        includeTests: false,
+        fileInclude: [],
+        fileExclude: [],
       },
       commands: {
         'find-matches': {

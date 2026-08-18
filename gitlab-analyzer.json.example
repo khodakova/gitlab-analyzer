@@ -6,8 +6,8 @@
     "branch": "develop",
     "repoNameFilter": "-front",
     "excludeRepos": [],
-    "pathFilter": "/src/",
-    "includeTests": false
+    "fileInclude": [],
+    "fileExclude": []
   },
   "commands": {
     "find-matches": {

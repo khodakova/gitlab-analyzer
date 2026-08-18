@@ -7,7 +7,7 @@
 
 - **`gitlab-analyzer find-matches <strings...>`** — find one or more substrings
   across every project in a GitLab instance, with filters for repo name,
-  branch, path, and `*.test.*` files.
+  branch, and glob-based file include/exclude.
 - **Programmatic API** — `import { findMatches, loadConfig } from 'gitlab-analyzer'`
   for custom post-processing pipelines.
 - **Config-driven** — JSON / JS / TS config files via
@@ -84,7 +84,7 @@ Each option is resolved in this order (highest wins):
 1. CLI flag                        e.g. --branch main
 2. Environment variable            GITLAB_URL, PRIVATE_TOKEN (typically from .env)
 3. gitlab-analyzer.json config     defaults.*, commands.find-matches.*, gitlab.url
-4. Built-in default                branch="develop", pathFilter="/src/", concurrency=5, ...
+4. Built-in default                branch="develop", concurrency=5, fileInclude=[], fileExclude=[], ...
 ```
 
 If, after all four sources are consulted, a **required** option is still
@@ -156,8 +156,8 @@ A more complete example showing every supported field:
     "branch": "develop",
     "repoNameFilter": "frontend",
     "excludeRepos": ["archived-repo", "wip-repo"],
-    "pathFilter": "/src/",
-    "includeTests": false,
+    "fileInclude": [],
+    "fileExclude": [],
     "enableLogs": true
   },
   "commands": {
@@ -177,8 +177,8 @@ A more complete example showing every supported field:
 | `defaults.branch` | string | `"develop"` | Branch to scan |
 | `defaults.repoNameFilter` | string | — | Substring filter for repo names |
 | `defaults.excludeRepos` | string[] | `[]` | Repo names to skip |
-| `defaults.pathFilter` | string | `"/src/"` (built-in) | Substring filter for file paths |
-| `defaults.includeTests` | boolean | `false` | Include `*.test.*` files |
+| `defaults.fileInclude` | string[] | `[]` | Glob patterns; only matching files are scanned |
+| `defaults.fileExclude` | string[] | `[]` | Glob patterns; matching files are always skipped (wins over `fileInclude`) |
 | `defaults.enableLogs` | boolean | `false` | Enable debug/API logging (see [Logging](#logging)) |
 | `commands.find-matches.concurrency` | int (positive) | `5` | Parallel requests to GitLab |
 | `commands.find-matches.output` | string | — | Path to write JSON results |
@@ -205,8 +205,10 @@ Options:
   -r, --repo-filter <str>  Substring filter for project names (passed to GitLab search=)
   -e, --exclude <list>     Comma-separated list of repo names to skip
   -b, --branch <name>      Branch to scan in every project
-  -p, --path-filter <str>  Substring filter for file paths inside the archive
-      --include-tests      Include *.test.* files in the search
+    --file-include <list> Comma-separated glob patterns; only files matching at
+                           least one pattern are scanned (default: all)
+    --file-exclude <list> Comma-separated glob patterns; matching files are
+                           always skipped (wins over --file-include)
       --format <txt|json>  Report format (default: json; drives the extension of
                            the auto-generated file name)
       --stdout             Also write the report to stdout (in addition to the file)
@@ -296,7 +298,7 @@ file and nothing gets overwritten:
 ```powershell
 node dist/cli.js find-matches 'string1', 'string2' `
   --repo-filter 'my-repo' `
-  --include-tests `
+  --file-include '**/*.ts,**/*.tsx' `
   -o "./results/run-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
 ```
 
@@ -360,8 +362,8 @@ const results: MatchResult[] = await findMatches({
     { id: 42, name: 'frontend-app' },
     { id: 7, name: 'backend-api' },
   ],
-  pathFilter: '/src/',
-  includeTests: false,
+  fileInclude: [],
+  fileExclude: [],
   concurrency: 5,
   onProgress: (done, total, currentRepo) => {
     process.stderr.write(`[${done}/${total}] ${currentRepo}\n`);
@@ -472,8 +474,8 @@ is missing, `branchExists: false`).
     "branch": "develop",
     "searchStrings": ["console.log", "debugger"],
     "repoNameFilter": null,
-    "pathFilter": "/src/",
-    "includeTests": false,
+    "fileInclude": [],
+    "fileExclude": [],
     "excludeRepos": ["archived-repo"]
   },
   "repositories": [
@@ -564,15 +566,29 @@ remove the field from the config file.
 
 ### No matches but the file definitely contains the string
 
-The default `pathFilter` is `'/src/'`, so files outside any `src` directory
-are skipped. Pass `--path-filter '/'` to scan every file in every archive:
+By default every file in every archive is scanned. If you've set a narrowing
+`fileInclude` (e.g. `'**/src/**'`) in your config, files outside that pattern
+won't be scanned — drop the `fileInclude` line or override it with
+`--file-include '**/*'` for that run:
 
 ```bash
-gitlab-analyzer find-matches 'needle' --path-filter '/'
+gitlab-analyzer find-matches 'needle' --file-include '**/*'
 ```
 
-`*.test.*` files are excluded by default — pass `--include-tests` to include
-them.
+Test files are scanned by default — exclude them with
+`--file-exclude '**/*.test.ts'`.
+
+### Common glob patterns
+
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`), so patterns must account for that leading slash.
+
+| Need | Pattern |
+|---|---|
+| Find test files | `**/*.test.*` |
+| Find a file by its exact name (anywhere) | `**/foo.ts` |
+| Find any `.ts` file | `**/*.ts` |
+| Find files only under `src/` | `**/src/**/*.ts` |
+| Skip node_modules | `**/node_modules/**` |
 
 ## Security: tokens
 

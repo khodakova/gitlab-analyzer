@@ -36,8 +36,10 @@ export type Report = {
     branch: string;
     searchStrings: string[];
     repoNameFilter: string | null;
-    pathFilter: string;
-    includeTests: boolean;
+    /** Glob patterns for file paths to SCAN (always an array; empty = scan all). */
+    fileInclude: string[];
+    /** Glob patterns for file paths to SKIP (always an array; empty = no exclude). */
+    fileExclude: string[];
     excludeRepos: string[];
   };
   repositories: ReportRepository[];
@@ -129,8 +131,13 @@ export function assertFormatPathConsistency(
 /**
  * Render the report as human-readable text. Mirrors the JSON structure
  * (metadata first, then per-repo results with full file content).
+ *
+ * `filesScanned` is an optional stdout-only summary (E.14): the total number
+ * of files that passed both filters across all repos. It is NOT part of the
+ * Report metadata — the JSON file shape is unchanged. When omitted (e.g.
+ * from a unit test without metrics), we print `0`.
  */
-export function renderReportTxt(report: Report): string {
+export function renderReportTxt(report: Report, filesScanned?: number): string {
   const lines: string[] = [];
   const { metadata, repositories } = report;
 
@@ -140,14 +147,21 @@ export function renderReportTxt(report: Report): string {
   lines.push(`Branch: ${metadata.branch}`);
   lines.push(`Search strings: ${metadata.searchStrings.join(', ') || '(none)'}`);
   lines.push(`Repo name filter: ${metadata.repoNameFilter ?? '(none)'}`);
-  lines.push(`Path filter: ${metadata.pathFilter}`);
-  lines.push(`Include tests: ${metadata.includeTests ? 'yes' : 'no'}`);
+  lines.push(
+    `File include: ${metadata.fileInclude.length > 0 ? metadata.fileInclude.join(', ') : '(none)'}`,
+  );
+  lines.push(
+    `File exclude: ${metadata.fileExclude.length > 0 ? metadata.fileExclude.join(', ') : '(none)'}`,
+  );
   lines.push(
     `Excluded repos: ${metadata.excludeRepos.length > 0 ? metadata.excludeRepos.join(', ') : '(none)'}`,
   );
   lines.push(
     `Repositories scanned: ${repositories.length}`,
   );
+  // E.14 — stdout-only summary of files that passed both filters. NOT part
+  // of the Report metadata / JSON file shape.
+  lines.push(`проанализировано файлов: ${filesScanned ?? 0}`);
   lines.push('');
 
   for (const repo of repositories) {
@@ -192,7 +206,7 @@ export function renderReportTxt(report: Report): string {
 export function buildReport(
   resolvedOptions: Pick<
     ResolvedFindMatchesOptions,
-    'branch' | 'repoNameFilter' | 'pathFilter' | 'includeTests' | 'excludeRepos' | 'format' | 'stdout'
+    'branch' | 'repoNameFilter' | 'fileInclude' | 'fileExclude' | 'excludeRepos' | 'format' | 'stdout'
   >,
   strings: string[],
   scannedRepos: ReportRepository[],
@@ -204,8 +218,8 @@ export function buildReport(
       branch: resolvedOptions.branch,
       searchStrings: strings,
       repoNameFilter: resolvedOptions.repoNameFilter ?? null,
-      pathFilter: resolvedOptions.pathFilter,
-      includeTests: resolvedOptions.includeTests,
+      fileInclude: resolvedOptions.fileInclude,
+      fileExclude: resolvedOptions.fileExclude,
       excludeRepos: resolvedOptions.excludeRepos,
     },
     repositories: scannedRepos,

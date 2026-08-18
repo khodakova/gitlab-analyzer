@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import JSZip from 'jszip';
+import picomatch from 'picomatch';
 
 /**
  * Hoisted module mocks. `vi.hoisted` runs BEFORE `vi.mock`, so the mock
@@ -31,7 +32,7 @@ import { configureLogger, logger, flushLogs } from '../../utils/logger.ts';
 /**
  * Build a real in-memory ZIP archive (NOT a JSZip mock). Paths MUST use
  * leading slashes (`/src/foo.ts`) to match real GitLab archive structure
- * — otherwise the default `pathFilter='/src/'` won't match anything.
+ * — picomatch patterns need a leading double-star to traverse dirs.
  */
 async function makeZip(files: Record<string, string>): Promise<ArrayBuffer> {
   const zip = new JSZip();
@@ -114,8 +115,8 @@ describe('findMatches', () => {
     });
   });
 
-  describe('case 2: pathFilter', () => {
-    it('only includes files whose path contains pathFilter substring', async () => {
+  describe('case 2: fileInclude glob', () => {
+    it('fileInclude glob matches only paths under /src/', async () => {
       const archive = await makeZip({
         '/src/keep.ts': 'TARGET',
         '/docs/skip.ts': 'TARGET',
@@ -128,16 +129,18 @@ describe('findMatches', () => {
       const results = await findMatches({
         searchStrings: ['TARGET'],
         branch: 'main',
+        fileInclude: ['**/src/**'],
       });
 
       expect(results[0].results).toHaveLength(1);
       expect(results[0].results[0].filename).toBe('/src/keep.ts');
     });
 
-    it('default pathFilter is "/src/"', async () => {
+    it('default fileInclude is empty — scans ALL files (BREAKING)', async () => {
       const archive = await makeZip({
         '/src/included.ts': 'X',
         '/lib/excluded.ts': 'X',
+        '/README.md': 'X',
       });
 
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
@@ -146,15 +149,77 @@ describe('findMatches', () => {
       const results = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
-        // no pathFilter → default '/src/'
+        // no fileInclude → default [] → scan every file
       });
 
-      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/included.ts']);
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/README.md',
+        '/lib/excluded.ts',
+        '/src/included.ts',
+      ]);
+    });
+
+    it('fileInclude with two patterns uses OR semantics', async () => {
+      const archive = await makeZip({
+        '/src/a.ts': 'TARGET',
+        '/docs/b.md': 'TARGET',
+        '/lib/c.ts': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['**/*.ts', '**/*.md'],
+      });
+
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/docs/b.md',
+        '/lib/c.ts',
+        '/src/a.ts',
+      ]);
+    });
+
+    it('picomatch semantics: **/*.ts matches /src/foo.ts; *.ts and src/**/*.ts do NOT', async () => {
+      const archive = await makeZip({
+        '/src/a.ts': 'X',
+        '/lib/b.ts': 'X',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      // *.ts does NOT match /src/foo.ts — path keeps its leading /
+      const r1 = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        fileInclude: ['*.ts'],
+      });
+      expect(r1[0].results).toEqual([]);
+
+      // src/**/*.ts does NOT match /src/foo.ts — pattern requires start with
+      // "src" segment, but the path starts with "/"
+      const r2 = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        fileInclude: ['src/**/*.ts'],
+      });
+      expect(r2[0].results).toEqual([]);
+
+      // **/*.ts matches both (the **/ absorbs the leading /)
+      const r3 = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        fileInclude: ['**/*.ts'],
+      });
+      expect(r3[0].results.map((m) => m.filename).sort()).toEqual(['/lib/b.ts', '/src/a.ts']);
     });
   });
 
-  describe('case 3: includeTests flag', () => {
-    it('skips .test.ts files by default', async () => {
+  describe('case 3: fileExclude glob', () => {
+    it('scans test files by default (no fileExclude)', async () => {
       const archive = await makeZip({
         '/src/foo.ts': 'TARGET',
         '/src/foo.test.ts': 'TARGET',
@@ -166,31 +231,73 @@ describe('findMatches', () => {
       const results = await findMatches({
         searchStrings: ['TARGET'],
         branch: 'main',
-        // no includeTests → default false
-      });
-
-      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/foo.ts']);
-    });
-
-    it('includes .test.ts files when includeTests=true', async () => {
-      const archive = await makeZip({
-        '/src/foo.ts': 'TARGET',
-        '/src/foo.test.ts': 'TARGET',
-      });
-
-      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
-      getProjectArchiveMock.mockResolvedValue(archive);
-
-      const results = await findMatches({
-        searchStrings: ['TARGET'],
-        branch: 'main',
-        includeTests: true,
+        // no fileExclude → both files are scanned
       });
 
       expect(results[0].results.map((m) => m.filename).sort()).toEqual([
         '/src/foo.test.ts',
         '/src/foo.ts',
       ]);
+    });
+
+    it('fileExclude=[**/*.test.ts] skips .test.ts files', async () => {
+      const archive = await makeZip({
+        '/src/foo.ts': 'TARGET',
+        '/src/foo.test.ts': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileExclude: ['**/*.test.ts'],
+      });
+
+      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/foo.ts']);
+    });
+
+    it('exclude wins over include (gitignore-style)', async () => {
+      const archive = await makeZip({
+        '/src/foo.ts': 'TARGET',
+        '/src/foo.test.ts': 'TARGET',
+        '/src/bar.tsx': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['**/*.ts*'],
+        fileExclude: ['**/*.test.ts'],
+      });
+
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/src/bar.tsx',
+        '/src/foo.ts',
+      ]);
+    });
+
+    it('empty fileExclude + non-empty fileInclude does not skip anything', async () => {
+      const archive = await makeZip({
+        '/src/a.ts': 'TARGET',
+        '/lib/b.md': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['**/*.ts'],
+        fileExclude: [],
+      });
+
+      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/a.ts']);
     });
   });
 
@@ -771,14 +878,21 @@ describe('findMatches', () => {
         unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0,
       };
 
+      const fileInclude = ['**/src/**'];
+      const fileExclude: string[] = [];
+      const compiled = {
+        includeMatchers: fileInclude.map((p) => picomatch(p)),
+        excludeMatchers: fileExclude.map((p) => picomatch(p)),
+      };
+
       const results = await findStrInZip(
         archive,
         ['TARGET'],
-        { pathFilter: '/src/', includeTests: false },
+        compiled,
         metrics,
       );
 
-      // Only /src/a.ts and /src/b.ts passed the path filter → 2 scanned.
+      // Only /src/a.ts and /src/b.ts passed the include filter → 2 scanned.
       expect(metrics.filesScanned).toBe(2);
       // Only /src/a.ts matched.
       expect(metrics.filesMatched).toBe(1);
@@ -794,13 +908,42 @@ describe('findMatches', () => {
         unzipMs: 0, scanMs: 0, filesScanned: -1, filesMatched: -1, textLength: -1,
       } as { unzipMs: number; scanMs: number; filesScanned: number; filesMatched: number; textLength: number };
 
-      const results = await findStrInZip(null, ['X'], { pathFilter: '/', includeTests: false }, metrics);
+      const compiledEmpty = {
+        includeMatchers: [] as Array<(path: string) => boolean>,
+        excludeMatchers: [] as Array<(path: string) => boolean>,
+      };
+
+      const results = await findStrInZip(null, ['X'], compiledEmpty, metrics);
 
       expect(results).toEqual([]);
       // archive === null → the function returns early and must NOT touch metrics.
       expect(metrics).toEqual({
         unzipMs: 0, scanMs: 0, filesScanned: -1, filesMatched: -1, textLength: -1,
       });
+    });
+
+    it('metrics only count files passing both filters (exclude priority)', async () => {
+      const archive = await makeZip({
+        '/src/a.ts': 'TARGET',
+        '/src/a.test.ts': 'TARGET',
+      });
+      const metrics = {
+        unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0,
+      };
+
+      const fileInclude = ['**/*.ts'];
+      const fileExclude = ['**/*.test.ts'];
+      const compiled = {
+        includeMatchers: fileInclude.map((p) => picomatch(p)),
+        excludeMatchers: fileExclude.map((p) => picomatch(p)),
+      };
+
+      await findStrInZip(archive, ['TARGET'], compiled, metrics);
+
+      // Only /src/a.ts passed include AND survived exclude → 1 scanned.
+      expect(metrics.filesScanned).toBe(1);
+      expect(metrics.filesMatched).toBe(1);
+      expect(metrics.textLength).toBe('TARGET'.length);
     });
   });
 

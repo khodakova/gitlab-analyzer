@@ -71,7 +71,8 @@ const defaultConfig = () => ({
   defaults: {
     branch: 'develop',
     excludeRepos: [],
-    includeTests: false,
+    fileInclude: [],
+    fileExclude: [],
   },
   commands: {
     'find-matches': { concurrency: 5 },
@@ -147,8 +148,8 @@ describe('cli > buildProgram', () => {
       expect(out).toContain('--repo-filter');
       expect(out).toContain('--exclude');
       expect(out).toContain('--branch');
-      expect(out).toContain('--path-filter');
-      expect(out).toContain('--include-tests');
+      expect(out).toContain('--file-include');
+      expect(out).toContain('--file-exclude');
       expect(out).toContain('--output');
       expect(out).toContain('--concurrency');
       expect(out).toContain('--interactive');
@@ -435,6 +436,79 @@ describe('cli > buildProgram', () => {
       const passedOpts = mocks.findMatches.mock.calls[0][0];
       expect(passedOpts.excludeRepos).toEqual(['wip', 'archive', 'old']);
     });
+
+    it('parses comma-separated --file-include values into an array', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--file-include',
+        '**/*.ts, **/*.tsx , ,src/**/*.json',
+      ]);
+
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findMatches.mock.calls[0][0];
+      expect(passedOpts.fileInclude).toEqual([
+        '**/*.ts',
+        '**/*.tsx',
+        'src/**/*.json',
+      ]);
+    });
+
+    it('parses comma-separated --file-exclude values into an array', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--file-exclude',
+        'dist/**, **/*.test.ts , ,node_modules/**',
+      ]);
+
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findMatches.mock.calls[0][0];
+      expect(passedOpts.fileExclude).toEqual([
+        'dist/**',
+        '**/*.test.ts',
+        'node_modules/**',
+      ]);
+    });
+
+    it('last-wins for repeated --file-include (replace, not merge)', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--file-include',
+        'first/**/*.ts',
+        '--file-include',
+        'second/**/*.json',
+      ]);
+
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findMatches.mock.calls[0][0];
+      expect(passedOpts.fileInclude).toEqual(['second/**/*.json']);
+    });
   });
 
   describe('runtime error handling', () => {
@@ -445,7 +519,8 @@ describe('cli > buildProgram', () => {
         defaults: {
           branch: 'develop',
           excludeRepos: [],
-          includeTests: false,
+          fileInclude: [],
+          fileExclude: [],
         },
         commands: { 'find-matches': { concurrency: 5 } },
       });

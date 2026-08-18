@@ -60,8 +60,27 @@ export function buildProgram(): Command {
           .filter((s) => s.length > 0),
     )
     .option('-b, --branch <name>', 'Branch to scan in every project')
-    .option('-p, --path-filter <str>', 'Substring filter for file paths inside the archive')
-    .option('--include-tests', 'Include *.test.* files in the search')
+    .option(
+      '--file-include <list>',
+      [
+        'Comma-separated glob patterns for file paths to scan (empty = scan all).',
+        "Paths from the archive keep a leading '/', so `*.ts` does NOT match `/src/foo.ts` — use `**/*.ts` (anywhere) or `**/src/**/*.ts` / `/src/**/*.ts` (only under `/src/`); `src/**/*.ts` does NOT work because the path starts with `/`.",
+      ].join(' '),
+      (val: string) =>
+        val
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+    )
+    .option(
+      '--file-exclude <list>',
+      'Comma-separated glob patterns for file paths to skip (gitignore-style, wins over --file-include; same `*.ts` vs `**/*.ts` rule as --file-include)',
+      (val: string) =>
+        val
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+    )
     .option(
       '--interactive',
       'Let you choose which repositories to search (all pre-selected; ↑/↓ scrolls, space toggles, Enter confirms); empty selection cancels',

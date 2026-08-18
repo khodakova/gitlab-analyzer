@@ -11,7 +11,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.gitlab?.url).toBe('https://gitlab.com');
       expect(parsed.defaults.branch).toBe('develop');
       expect(parsed.defaults.excludeRepos).toEqual([]);
-      expect(parsed.defaults.includeTests).toBe(false);
+      expect(parsed.defaults.fileInclude).toEqual([]);
+      expect(parsed.defaults.fileExclude).toEqual([]);
       expect(parsed.commands['find-matches'].concurrency).toBe(5);
       expect(parsed.commands['find-matches'].output).toBeUndefined();
     });
@@ -26,7 +27,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.gitlab).toBeUndefined();
       expect(parsed.defaults.branch).toBe('develop');
       expect(parsed.defaults.excludeRepos).toEqual([]);
-      expect(parsed.defaults.includeTests).toBe(false);
+      expect(parsed.defaults.fileInclude).toEqual([]);
+      expect(parsed.defaults.fileExclude).toEqual([]);
       expect(parsed.commands['find-matches'].concurrency).toBe(5);
     });
 
@@ -79,7 +81,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
       expect(parsed.defaults).toEqual({
         branch: 'develop',
         excludeRepos: [],
-        includeTests: false,
+        fileInclude: [],
+        fileExclude: [],
         enableLogs: false,
       });
     });
@@ -95,7 +98,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
 
       expect(parsed.defaults.branch).toBe('main');
       expect(parsed.defaults.excludeRepos).toEqual(['archived', 'wip']);
-      expect(parsed.defaults.includeTests).toBe(false);
+      expect(parsed.defaults.fileInclude).toEqual([]);
+      expect(parsed.defaults.fileExclude).toEqual([]);
     });
 
     it('defaults enableLogs to false when defaults block is omitted', () => {
@@ -161,8 +165,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
           branch: 'develop',
           repoNameFilter: 'frontend',
           excludeRepos: ['archived-repo', 'wip-repo'],
-          pathFilter: '/src/',
-          includeTests: false,
+          fileInclude: ['**/*.ts'],
+          fileExclude: ['**/*.test.ts'],
           enableLogs: true,
         },
         commands: {
@@ -181,8 +185,8 @@ describe('GitlabAnalyzerConfigSchema', () => {
           branch: 'develop',
           repoNameFilter: 'frontend',
           excludeRepos: ['archived-repo', 'wip-repo'],
-          pathFilter: '/src/',
-          includeTests: false,
+          fileInclude: ['**/*.ts'],
+          fileExclude: ['**/*.test.ts'],
           enableLogs: true,
         },
         commands: {

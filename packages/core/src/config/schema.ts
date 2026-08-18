@@ -15,8 +15,8 @@ const DefaultsSchema = z.object({
   branch: z.string().default('develop'),
   repoNameFilter: z.string().optional(),
   excludeRepos: z.array(z.string()).default([]),
-  pathFilter: z.string().optional(),
-  includeTests: z.boolean().default(false),
+  fileInclude: z.array(z.string()).default([]),
+  fileExclude: z.array(z.string()).default([]),
   enableLogs: z.boolean().default(false),
 });
 
@@ -34,7 +34,8 @@ export const GitlabAnalyzerConfigSchema = z.object({
   defaults: DefaultsSchema.default(() => ({
     branch: 'develop',
     excludeRepos: [] as string[],
-    includeTests: false,
+    fileInclude: [] as string[],
+    fileExclude: [] as string[],
     enableLogs: false,
   })),
   commands: z.object({

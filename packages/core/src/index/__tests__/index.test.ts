@@ -28,8 +28,8 @@ describe('index > public API surface', () => {
       branch: 'develop',
       repoNameFilter: 'frontend',
       excludeRepos: ['wip'],
-      pathFilter: '/src/',
-      includeTests: false,
+      fileInclude: ['**/*.ts'],
+      fileExclude: [],
       concurrency: 3,
     };
     expect(typedLocal.searchStrings).toEqual(['a', 'b']);

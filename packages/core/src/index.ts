@@ -45,6 +45,7 @@ export { findMatches } from './commands/find-matches.ts';
 export type {
   FindMatchesOptions,
   MatchResult,
+  FileFilters,
 } from './commands/find-matches.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';

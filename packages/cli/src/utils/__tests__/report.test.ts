@@ -89,8 +89,8 @@ describe('report > renderReportTxt', () => {
       branch: 'develop',
       searchStrings: ['needle'],
       repoNameFilter: null,
-      pathFilter: '/src/',
-      includeTests: false,
+      fileInclude: ['**/*.ts'],
+      fileExclude: ['**/*.test.ts'],
       excludeRepos: ['skip-me'],
     },
     repositories: [
@@ -117,9 +117,38 @@ describe('report > renderReportTxt', () => {
     const txt = renderReportTxt(report);
     expect(txt).toContain('Generated at: 2026-08-13T00:00:00.000Z');
     expect(txt).toContain('Branch: develop');
+    expect(txt).toContain('File include: **/*.ts');
+    expect(txt).toContain('File exclude: **/*.test.ts');
     expect(txt).toContain('Excluded repos: skip-me');
     expect(txt).toContain('---- alpha (id: 1) ----');
     expect(txt).toContain('> /src/a.ts');
     expect(txt).toContain('matched: needle');
+  });
+
+  it('shows (none) for empty fileInclude / fileExclude arrays', () => {
+    const emptyReport: Report = {
+      ...report,
+      metadata: {
+        ...report.metadata,
+        fileInclude: [],
+        fileExclude: [],
+      },
+    };
+    const txt = renderReportTxt(emptyReport);
+    expect(txt).toContain('File include: (none)');
+    expect(txt).toContain('File exclude: (none)');
+  });
+
+  it('includes `проанализировано файлов: N` line in stdout only', () => {
+    const txt = renderReportTxt(report, 42);
+    expect(txt).toContain('проанализировано файлов: 42');
+
+    // And the string is NOT in the JSON serialization (stdout-only field).
+    expect(JSON.stringify(report)).not.toContain('проанализировано файлов');
+  });
+
+  it('falls back to 0 when filesScanned is not passed', () => {
+    const txt = renderReportTxt(report);
+    expect(txt).toContain('проанализировано файлов: 0');
   });
 });

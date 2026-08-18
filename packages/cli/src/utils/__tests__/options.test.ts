@@ -9,7 +9,8 @@ const emptyConfig = () => ({
   defaults: {
     branch: 'develop',
     excludeRepos: [],
-    includeTests: false,
+    fileInclude: [],
+    fileExclude: [],
   },
   commands: { 'find-matches': { concurrency: 5 } },
 });
@@ -49,20 +50,36 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (result.ok) expect(result.resolved.repoNameFilter).toBe('frontend');
     });
 
-    it('--include-tests overrides config.defaults.includeTests', () => {
+    it('--file-include overrides config.defaults.fileInclude', () => {
       const config = {
         ...emptyConfig(),
-        defaults: { ...emptyConfig().defaults, includeTests: true },
+        defaults: { ...emptyConfig().defaults, fileInclude: ['**/*.md'] },
       };
 
       const result = resolveOptions(
         ['x'],
-        { includeTests: false },
+        { fileInclude: ['**/*.ts'] },
         config as never,
       );
 
       expect(result.ok).toBe(true);
-      if (result.ok) expect(result.resolved.includeTests).toBe(false);
+      if (result.ok) expect(result.resolved.fileInclude).toEqual(['**/*.ts']);
+    });
+
+    it('--file-exclude overrides config.defaults.fileExclude', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileExclude: ['**/*.min.js'] },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { fileExclude: ['**/*.test.ts'] },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileExclude).toEqual(['**/*.test.ts']);
     });
 
     it('--concurrency overrides config.commands.find-matches.concurrency', () => {
@@ -109,6 +126,60 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.resolved.excludeRepos).toEqual(['archived', 'wip']);
     });
+
+    it('falls back to config.defaults.fileInclude / fileExclude when CLI is silent', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: {
+          ...emptyConfig().defaults,
+          fileInclude: ['**/*.ts'],
+          fileExclude: ['**/*.test.ts'],
+        },
+      };
+
+      const result = resolveOptions(['x'], {}, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.fileInclude).toEqual(['**/*.ts']);
+        expect(result.resolved.fileExclude).toEqual(['**/*.test.ts']);
+      }
+    });
+
+    it('CLI arrays win verbatim (replace, NOT merge)', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: {
+          ...emptyConfig().defaults,
+          fileInclude: ['c'],
+        },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { fileInclude: ['a', 'b'] },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileInclude).toEqual(['a', 'b']);
+    });
+
+    it('config fileInclude: [] does NOT block CLI override', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileInclude: [] },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { fileInclude: ['**/*.ts'] },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileInclude).toEqual(['**/*.ts']);
+    });
   });
 
   describe('precedence — built-in default when nothing else', () => {
@@ -119,11 +190,18 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (result.ok) expect(result.resolved.branch).toBe('develop');
     });
 
-    it('pathFilter defaults to "/src/"', () => {
+    it('fileInclude defaults to []', () => {
       const result = resolveOptions(['x'], {}, emptyConfig() as never);
 
       expect(result.ok).toBe(true);
-      if (result.ok) expect(result.resolved.pathFilter).toBe('/src/');
+      if (result.ok) expect(result.resolved.fileInclude).toEqual([]);
+    });
+
+    it('fileExclude defaults to []', () => {
+      const result = resolveOptions(['x'], {}, emptyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.fileExclude).toEqual([]);
     });
 
     it('concurrency defaults to 5', () => {
