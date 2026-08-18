@@ -321,7 +321,7 @@ describe('runFindMatches (exported helper)', () => {
       await vi.advanceTimersByTimeAsync(150);
 
       const duringFetch = collectWriteCalls(stderrSpy);
-      expect(duringFetch).toContain('Получение списка репозиториев…');
+      expect(duringFetch).toContain('Получение списка репозиториев...');
 
       resolveProjects([]);
       await runPromise
