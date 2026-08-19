@@ -813,7 +813,7 @@ describe('findMatches', () => {
     });
   });
 
-  describe('case 12: log levels (success "Готово" / warn "Архив не получен" / debug gate)', () => {
+  describe('case 12: log levels (success "Done" / warn "Archive not received" / debug gate)', () => {
     let stderrSpy: ReturnType<typeof vi.spyOn>;
     const collect = () =>
       stderrSpy.mock.calls.map((c: readonly unknown[]) => String(c[0])).join('');
@@ -827,7 +827,7 @@ describe('findMatches', () => {
       configureLogger({ enabled: false });
     });
 
-    it('logs ✓ Готово (success) for a scanned repo, even when debug is disabled', async () => {
+    it('logs ✓ Done (success) for a scanned repo, even when debug is disabled', async () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-ok' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
@@ -835,20 +835,20 @@ describe('findMatches', () => {
       await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
 
-      expect(collect()).toContain('✓ Готово: repo-ok (1 файл(ов) с совпадениями)');
+      expect(collect()).toContain('✓ Done: repo-ok (1 file(s) with matches)');
     });
 
-    it('logs ⚠ Архив не получен (warn) when the archive fetch rejects, even when debug is disabled', async () => {
+    it('logs ⚠ Archive not received (warn) when the archive fetch rejects, even when debug is disabled', async () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-bad' })]);
       getProjectArchiveMock.mockRejectedValue(new Error('Request failed with status code 404'));
 
       await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
 
-      expect(collect()).toContain('⚠ Архив не получен: repo-bad (');
+      expect(collect()).toContain('⚠ Archive not received: repo-bad (');
     });
 
-    it('gates debug lines ([debug] «Скачивание архива…») behind enabled', async () => {
+    it('gates debug lines ([debug] "Downloading archive...") behind enabled', async () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-dbg' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
@@ -858,12 +858,12 @@ describe('findMatches', () => {
       await flushLogs();
       expect(collect()).not.toContain('[debug]');
 
-      // enabled: [debug] «Скачивание архива…» appears
+      // enabled: [debug] "Downloading archive..." appears
       stderrSpy.mockClear();
       configureLogger({ enabled: true });
       await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
-      expect(collect()).toContain('[debug] Скачивание архива: repo-dbg (id=1, branch=main)…');
+      expect(collect()).toContain('[debug] Downloading archive: repo-dbg (id=1, branch=main)...');
     });
   });
 
@@ -979,9 +979,9 @@ describe('findMatches', () => {
 
     it('emits a timing with error for a failed repo, downloadMs >= 0, phases zero', async () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 5, name: 'broken' })]);
-      getProjectArchiveMock.mockRejectedValue(new Error('превышен таймаут'));
+      getProjectArchiveMock.mockRejectedValue(new Error('timeout exceeded'));
 
-      let timing: import('../find-matches.ts').RepoTiming | undefined;
+      let timing: import('../find-matches.types.ts').RepoTiming | undefined;
       await findMatches({
         searchStrings: ['X'],
         branch: 'main',
@@ -989,7 +989,7 @@ describe('findMatches', () => {
       });
 
       expect(timing).toBeDefined();
-      expect(timing!.error).toContain('превышен таймаут');
+      expect(timing!.error).toContain('timeout exceeded');
       expect(timing!.downloadMs).toBeGreaterThanOrEqual(0);
       expect(timing!.unzipMs).toBe(0);
       expect(timing!.scanMs).toBe(0);

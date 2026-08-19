@@ -49,7 +49,7 @@ describe('getProjectArchive metrics accumulator', () => {
     const metrics = { downloadMs: 0 };
     await expect(
       getProjectArchive(7, { projectName: 'repo', branch: 'dev', metrics }),
-    ).rejects.toThrow('превышен таймаут скачивания архива (60с)');
+    ).rejects.toThrow('archive download timed out (60s)');
 
     expect(metrics.downloadMs).toBeGreaterThanOrEqual(0);
   });

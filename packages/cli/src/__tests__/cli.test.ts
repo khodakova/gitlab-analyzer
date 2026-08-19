@@ -289,9 +289,9 @@ describe('cli > buildProgram', () => {
       ]);
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain('Обработано 1 из 3');
-      expect(stderrText).toContain('Обработано 2 из 3');
-      expect(stderrText).toContain('Обработано 3 из 3');
+  expect(stderrText).toContain('Processed 1 of 3');
+  expect(stderrText).toContain('Processed 2 of 3');
+  expect(stderrText).toContain('Processed 3 of 3');
     });
 
     it('shows the last started repo name after the counter via onRepoStart', async () => {
@@ -329,10 +329,10 @@ describe('cli > buildProgram', () => {
       ]);
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain('Обработано 0 из 2 · alpha');
-      expect(stderrText).toContain('Обработано 1 из 2 · alpha');
-      expect(stderrText).toContain('Обработано 1 из 2 · beta');
-      expect(stderrText).toContain('Обработано 2 из 2 · beta');
+      expect(stderrText).toContain('Processed 0 of 2 · alpha');
+      expect(stderrText).toContain('Processed 1 of 2 · alpha');
+      expect(stderrText).toContain('Processed 1 of 2 · beta');
+      expect(stderrText).toContain('Processed 2 of 2 · beta');
     });
 
     it('emits a summary line to stderr after a successful file write', async () => {
@@ -375,8 +375,8 @@ describe('cli > buildProgram', () => {
       ]);
 
       const stderrText = collectWriteCalls(stderrSpy);
-      expect(stderrText).toContain('✓ Отсканировано репозиториев: 2');
-      expect(stderrText).toContain(`✓ Отчёт: ${tmpFile}`);
+  expect(stderrText).toContain('✓ Scanned repositories: 2');
+  expect(stderrText).toContain(`✓ Report: ${tmpFile}`);
     });
 
     it('writes the report to stdout when --stdout is passed', async () => {

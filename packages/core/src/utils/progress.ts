@@ -25,8 +25,8 @@
  * @example
  * ```ts
  * const p = new ProgressRenderer(); // auto-detects stderr TTY
- * p.spin('Обработано 1 из 5');      // TTY: rewrites the line; non-TTY: prints (dedup)
- * p.spin('Обработано 2 из 5');
+ * p.spin('Processed 1 of 5');       // TTY: rewrites the line; non-TTY: prints (dedup)
+ * p.spin('Processed 2 of 5');
  * p.static('Wrote 2 repo(s) to out.json'); // TTY: clears then prints; non-TTY: prints
  * p.end();
  * ```

@@ -24,6 +24,7 @@ import { progress, report, renderProgressFrame } from '../utils/progress.ts';
 import {
   resolveOptions,
   type FindMatchesCliOptions,
+  type ResolvedFindMatchesOptions,
 } from '../utils/options.ts';
 import {
   assertFormatPathConsistency,
@@ -37,25 +38,107 @@ import {
 } from '../utils/report.ts';
 
 /**
- * Internal: shared implementation invoked by the commander action handler.
- *
- * Exported separately so tests can drive the full pipeline (resolve options →
- * fetch repo list → run search → build report → write output) without
- * spawning a child process.
- *
- * @returns Object containing the parsed report and the resolved output path
- *   (or `undefined` if nothing was written to disk).
- * @throws {Error} When one or more required options cannot be resolved from
- *   any source, or when `--format` conflicts with an explicit `--output`
- *   path extension.
+ * Write the `--metrics-file` NDJSON (run / one-repo-per-line / summary) and
+ * print the stderr metrics summary. Call on every normal exit of
+ * `runFindMatches`: `complete` (after the report is written), `cancel`
+ * (interactive empty selection) and `no-repos` (headless zero-repo guard).
+ * A write error is a warning, never fatal — the report is already written.
  */
-export async function runFindMatches(
+async function writeSummaryRecord(
+  startedAt: Date,
+  metrics: SearchMetrics,
+  heapBefore: number,
+  resolved: ResolvedFindMatchesOptions,
+  reason: 'complete' | 'cancel' | 'no-repos',
+): Promise<void> {
+  const heapAfter = process.memoryUsage().heapUsed;
+  const totalHeapGrowthBytes = heapAfter - heapBefore;
+  metrics.summary.totalHeapGrowthBytes = totalHeapGrowthBytes;
+
+  const totalWallMs = Date.now() - startedAt.getTime();
+  const repoRows = metrics.perRepo;
+  const totalPerRepoMs = repoRows.reduce((acc, t) => acc + t.totalMs, 0);
+  const repos = repoRows.length;
+  const ok = repoRows.filter((t) => t.error === undefined).length;
+  const errored = repos - ok;
+  const max = repoRows.reduce<RepoTiming | undefined>(
+    (acc, t) => (acc === undefined || t.totalMs > acc.totalMs ? t : acc),
+    undefined,
+  );
+
+  if (repos > 0) {
+    const avgRepoMs = repos > 0 ? totalPerRepoMs / repos : 0;
+    const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
+    progress.static(
+      `Metrics: ${repos} repos · list ${formatDuration(metrics.list.listMs)} (${metrics.list.pagesFetched} pg, ${metrics.list.reposFound} repos) · total ${formatDuration(totalWallMs)} · avg ${formatDuration(avgRepoMs)} · max ${max?.projectName ?? '-'} (${formatDuration(max?.totalMs ?? 0)}) · heap Δ${heapMb} MB`,
+    );
+  } else {
+    const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
+    progress.static(
+      `Metrics: exit=${reason} · list ${formatDuration(metrics.list.listMs)} · total ${formatDuration(totalWallMs)} · heap Δ${heapMb} MB`,
+    );
+  }
+
+  if (!resolved.metricsFile) {
+    return;
+  }
+
+  const runRecord = {
+    t: 'run',
+    exitReason: reason,
+    listMs: metrics.list.listMs,
+    pagesFetched: metrics.list.pagesFetched,
+    reposFound: metrics.list.reposFound,
+    totalWallMs,
+    totalPerRepoMs,
+    startedAt: startedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+  };
+  const repoRecords = repoRows.map((t) => ({
+    t: 'repo',
+    projectId: t.projectId,
+    projectName: t.projectName,
+    downloadMs: t.downloadMs,
+    unzipMs: t.unzipMs,
+    scanMs: t.scanMs,
+    totalMs: t.totalMs,
+    filesScanned: t.filesScanned,
+    filesMatched: t.filesMatched,
+    textLength: t.textLength,
+    error: t.error ?? null,
+  }));
+  const summaryRecord = {
+    t: 'summary',
+    exitReason: reason,
+    repos,
+    ok,
+    errored,
+    totalWallMs,
+    totalPerRepoMs,
+    avgRepoMs: repos > 0 ? totalPerRepoMs / repos : 0,
+    maxRepoMs: max?.totalMs ?? 0,
+    maxRepoName: max?.projectName ?? null,
+    totalHeapGrowthBytes,
+  };
+
+  const lines = [runRecord, ...repoRecords, summaryRecord].map((r) =>
+    JSON.stringify(r),
+  );
+  try {
+    await mkdir(dirname(resolved.metricsFile), { recursive: true });
+    await writeFile(resolved.metricsFile, `${lines.join('\n')}\n`, 'utf-8');
+  } catch (err) {
+    logger.warn(
+      `Failed to write metrics file (${resolved.metricsFile}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+// Resolve options from config/env/CLI and set up side-effects (logger, axios URL).
+async function prepareRun(
   strings: string[],
   opts: FindMatchesCliOptions,
-): Promise<{ report: Report; outputPath: string | undefined }> {
-  // Run-scope timing anchor. Must be the FIRST statement so totalWallMs
-  // captures the whole run (config load, list fetch, search, report write).
-  const startedAt = new Date();
+): Promise<{ resolved: ResolvedFindMatchesOptions }> {
   const config = await loadConfig();
   const resolution = resolveOptions(strings, opts, config);
 
@@ -89,140 +172,40 @@ export async function runFindMatches(
   // assignment is a no-op.
   axiosInstance.defaults.baseURL = resolved.gitlabUrl;
 
-  // Resolve the repository set (already filtered by excludeRepos — this must
-  // mirror findMatches' filter so the picker / printed list matches what will
-  // actually be searched). This list is ALSO handed to `findMatches` via
-  // `projects` so it does not re-fetch the project list (avoiding a duplicate
-  // API call and a duplicated "Найдено репозиториев" debug line). Kept pure:
-  // findMatches still does its own exclude/selected filtering on top.
-  //
-  // Fetching the repo list can take a while — `getAllProjects` walks every
-  // page of the GitLab projects API before any per-repo work begins, and
-  // previously nothing was drawn during that phase, so the console looked
-  // frozen. Show an indeterminate loader here so it's clear a request is in
-  // flight; it is torn down as soon as the list is available (before the
-  // interactive picker / headless list print), at which point the per-repo
-  // `Обработано N из M` spinner takes over.
+  return { resolved };
+}
+
+async function fetchRepoList(
+  repoNameFilter: string | undefined,
+  metrics: SearchMetrics,
+): Promise<SearchProjectsItem[]> {
   const fetchReposTimer = setInterval(() => {
-    progress.spin('Получение списка репозиториев…');
+    progress.spin('Fetching repository list...');
   }, 150);
 
-  // Run-scope metrics accumulator (SearchMetrics, from core/internal). Filled
-  // by findMatches (list + per-repo) and by this CLI (run-scope heap growth).
-  // Memory is sampled once before the list fetch and once at the end — the
-  // difference (totalHeapGrowthBytes) may be negative after GC.
-  const metrics: SearchMetrics = {
-    list: { listMs: 0, pagesFetched: 0, reposFound: 0 },
-    perRepo: [],
-    summary: {},
-  };
-  const heapBefore = process.memoryUsage().heapUsed;
-
-  let allProjects: SearchProjectsItem[];
   try {
-    logger.info(`Получение списка репозиториев (repoNameFilter='${resolved.repoNameFilter ?? ''}')…`);
-    allProjects = await getAllProjects(resolved.repoNameFilter, metrics.list);
-    logger.info(`Список репозиториев получен: ${allProjects.length}`);
+    logger.info(`Fetching repository list (repoNameFilter='${repoNameFilter ?? ''}')...`);
+    const allProjects = await getAllProjects(repoNameFilter, metrics.list);
+    logger.info(`Repository list fetched: ${allProjects.length}`);
+    return allProjects;
   } finally {
     clearInterval(fetchReposTimer);
     progress.clear();
   }
+}
 
-  /**
-   * Write the `--metrics-file` NDJSON (run / one-repo-per-line / summary) and
-   * print the stderr metrics summary. Call on every normal exit of
-   * `runFindMatches`: `complete` (after the report is written), `cancel`
-   * (interactive empty selection) and `no-repos` (headless zero-repo guard).
-   * A write error is a warning, never fatal — the report is already written.
-   */
-  const writeSummaryRecord = async (
-    reason: 'complete' | 'cancel' | 'no-repos',
-  ): Promise<void> => {
-    const heapAfter = process.memoryUsage().heapUsed;
-    const totalHeapGrowthBytes = heapAfter - heapBefore;
-    metrics.summary.totalHeapGrowthBytes = totalHeapGrowthBytes;
-
-    const totalWallMs = Date.now() - startedAt.getTime();
-    const repoRows = metrics.perRepo;
-    const totalPerRepoMs = repoRows.reduce((acc, t) => acc + t.totalMs, 0);
-    const repos = repoRows.length;
-    const ok = repoRows.filter((t) => t.error === undefined).length;
-    const errored = repos - ok;
-    const max = repoRows.reduce<RepoTiming | undefined>(
-      (acc, t) => (acc === undefined || t.totalMs > acc.totalMs ? t : acc),
-      undefined,
-    );
-
-    // stderr metrics summary (compact run-level aggregates; no per-repo detail).
-    if (repos > 0) {
-      const avgRepoMs = repos > 0 ? totalPerRepoMs / repos : 0;
-      const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
-      progress.static(
-        `Metrics: ${repos} repos · list ${formatDuration(metrics.list.listMs)} (${metrics.list.pagesFetched} pg, ${metrics.list.reposFound} repos) · total ${formatDuration(totalWallMs)} · avg ${formatDuration(avgRepoMs)} · max ${max?.projectName ?? '-'} (${formatDuration(max?.totalMs ?? 0)}) · heap Δ${heapMb} MB`,
-      );
-    } else {
-      const heapMb = (totalHeapGrowthBytes / 1_048_576).toFixed(1);
-      progress.static(
-        `Metrics: exit=${reason} · list ${formatDuration(metrics.list.listMs)} · total ${formatDuration(totalWallMs)} · heap Δ${heapMb} MB`,
-      );
-    }
-
-    if (!resolved.metricsFile) {
-      return;
-    }
-
-    const runRecord = {
-      t: 'run',
-      exitReason: reason,
-      listMs: metrics.list.listMs,
-      pagesFetched: metrics.list.pagesFetched,
-      reposFound: metrics.list.reposFound,
-      totalWallMs,
-      totalPerRepoMs,
-      startedAt: startedAt.toISOString(),
-      finishedAt: new Date().toISOString(),
-    };
-    const repoRecords = repoRows.map((t) => ({
-      t: 'repo',
-      projectId: t.projectId,
-      projectName: t.projectName,
-      downloadMs: t.downloadMs,
-      unzipMs: t.unzipMs,
-      scanMs: t.scanMs,
-      totalMs: t.totalMs,
-      filesScanned: t.filesScanned,
-      filesMatched: t.filesMatched,
-      textLength: t.textLength,
-      error: t.error ?? null,
-    }));
-    const summaryRecord = {
-      t: 'summary',
-      exitReason: reason,
-      repos,
-      ok,
-      errored,
-      totalWallMs,
-      totalPerRepoMs,
-      avgRepoMs: repos > 0 ? totalPerRepoMs / repos : 0,
-      maxRepoMs: max?.totalMs ?? 0,
-      maxRepoName: max?.projectName ?? null,
-      totalHeapGrowthBytes,
-    };
-
-    const lines = [runRecord, ...repoRecords, summaryRecord].map((r) =>
-      JSON.stringify(r),
-    );
-    try {
-      await mkdir(dirname(resolved.metricsFile), { recursive: true });
-      await writeFile(resolved.metricsFile, `${lines.join('\n')}\n`, 'utf-8');
-    } catch (err) {
-      logger.warn(
-        `Не удалось записать файл метрик (${resolved.metricsFile}): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  };
-
-  const excludeList = resolved.excludeRepos;
+// Filter the fetched repo list and decide whether/how to scan: interactive picker
+// (cancel → exit 0) or headless (empty list → exit 0, else print the repo list).
+async function resolveReposToScan(
+  allProjects: SearchProjectsItem[],
+  resolvedConfig: ResolvedFindMatchesOptions,
+  writeSummary: (reason: 'complete' | 'cancel' | 'no-repos') => Promise<void>,
+): Promise<{
+  repos: RepoInfo[];
+  filtered: SearchProjectsItem[];
+  selectedRepos: RepoInfo[] | undefined;
+}> {
+  const excludeList = resolvedConfig.excludeRepos;
   const filtered = allProjects.filter(
     (project) =>
       project.name !== null &&
@@ -235,61 +218,60 @@ export async function runFindMatches(
   }));
 
   let selectedRepos: RepoInfo[] | undefined;
-  if (resolved.interactive) {
+  if (resolvedConfig.interactive) {
     selectedRepos = await repoSelect(repos);
 
     if (selectedRepos.length === 0) {
-      await writeSummaryRecord('cancel');
-      report('Поиск отменён: не выбрано ни одного репозитория.');
+      await writeSummary('cancel');
+      report('Search cancelled: no repositories selected.');
       await flushLogs();
       process.exit(0);
     }
   } else {
-    // Nothing to scan (headless) — stop early instead of starting a
-    // meaningless 0-repo search and an empty summary. Exit 0: not an error,
-    // the filter/exclusions simply matched nothing.
+    // Headless empty filter → stop early; not an error, just nothing matched.
     if (repos.length === 0) {
-      logger.info('Репозитории не найдены: фильтр/исключения не дали результатов.');
-      await writeSummaryRecord('no-repos');
+      logger.info('No repositories found: filters/exclusions produced no results.');
+      await writeSummary('no-repos');
       await flushLogs();
       process.exit(0);
     }
     // Headless info output: show where the search will run (stderr, so stdout
     // report stays clean/pipeable).
-    progress.static(''); // разделитель между фазой получения списка и поиском
-    report(`Будет выполнен поиск по ${repos.length} репозиториям:`);
+    progress.static(''); // separator between the list-fetch and search phases
+    report(`Search will run across ${repos.length} repositories:`);
     for (const repo of repos) {
       report(repo.name);
     }
   }
 
-  // Per-repo error map, fed by onProgress's new `error` argument. Each repo is
-  // keyed by name so we can correlate the error with the matching report entry
-  // and the search results returned by findMatches (which omits errored repos).
-  const repoErrors = new Map<string, string>();
+  return { repos, filtered, selectedRepos };
+}
 
-  // Most recently *started* repo, fed by the `onRepoStart` hook. Analysis is
-  // parallel (`concurrency`, default 5), so several repos start/finish out of
-  // order; the live line shows the last one that began (not the last one that
-  // finished) so it reflects what is underway right now.
+/**
+ * Run the parallel search with live progress: per-repo errors collected via
+ * `onProgress`, loader animated by redrawing the same label, stopped (pinned as
+ * the final frame) when the last repo finishes.
+ */
+async function runSearchWithProgress(
+  strings: string[],
+  resolved: ResolvedFindMatchesOptions,
+  filtered: SearchProjectsItem[],
+  selectedRepos: RepoInfo[] | undefined,
+  repos: RepoInfo[],
+  metrics: SearchMetrics,
+): Promise<{ results: MatchResult[]; repoErrors: Map<string, string> }> {
+  const repoErrors = new Map<string, string>();
+  // Last *started* repo (analysis is parallel; live line shows what's underway now).
   let lastStartedRepo: string | undefined;
 
-  // Shared counters so `onRepoStart` / the spinner (which fire before/without a
-  // given repo incrementing `done`) can render `Обработано N из M` using the
-  // latest values reported by `onProgress` (whose `done`/`total` live inside its
-  // closure). Initialised to the repo count this run processes — mirrors
-  // findMatches' `total`, computed from the resolved/selected repo set.
   const doneRef = { current: 0 };
   const scannedCount = selectedRepos?.length ?? repos.length;
   const totalRef = { current: scannedCount };
 
-  // Single source of truth for the live frame, shared by the callbacks and the
-  // spinner timer so they always draw a consistent line.
   const currentFrame = (): string =>
     renderProgressFrame(doneRef.current, totalRef.current, lastStartedRepo);
 
-  // Animate the loader: while work is running, periodically redraw the current
-  // frame with the *same* label so `ProgressRenderer.spin` advances the glyph.
+  // Animates the loader: redraws the same label so ProgressRenderer.spin advances the glyph.
   const spinnerTimer = setInterval(() => {
     progress.spin(currentFrame());
   }, 150);
@@ -316,9 +298,7 @@ export async function runFindMatches(
       doneRef.current = done;
       totalRef.current = total;
       if (done >= total) {
-        // Last repo done — stop the spinner and pin the final frame as a
-        // permanent line so the log ends with a clean `Обработано M из M ...`
-        // before the summary.
+        // Last repo done — pin the final frame as a permanent line.
         clearInterval(spinnerTimer);
         progress.finish(currentFrame());
       } else {
@@ -329,20 +309,26 @@ export async function runFindMatches(
 
   let results: MatchResult[];
   try {
-    logger.info(`Начинаю поиск по ${scannedCount} репозиториям… (concurrency=${resolved.concurrency})`);
+    logger.info(`Starting search across ${scannedCount} repositories… (concurrency=${resolved.concurrency})`);
     results = await findMatches(findOpts);
-    logger.success('Поиск завершён.');
+    logger.success('Search finished.');
   } finally {
-    // Always stop the spinner timer — both on the normal path (where
-    // `onProgress` already finished/pinned the last frame via `progress.finish`)
-    // and on an exceptional path (e.g. a thrown error mid-run). `progress.clear`
-    // is a no-op when no live line is active, so it is safe to call here.
+    // Both normal path (onProgress already finished) and exceptional path.
     clearInterval(spinnerTimer);
     progress.clear();
   }
 
-  // The set of repos actually scanned = selectedRepos in interactive mode, or
-  // the full filtered list headless. Every scanned repo gets a report entry.
+  return { results, repoErrors };
+}
+
+// Build the final repositories[]: results first, then zero-match/error scanned repos.
+function assembleReport(
+  results: MatchResult[],
+  repoErrors: Map<string, string>,
+  filtered: SearchProjectsItem[],
+  selectedRepos: RepoInfo[] | undefined,
+  repos: RepoInfo[],
+): ReportRepository[] {
   const scanned = selectedRepos ?? repos;
   const repoInfoByName = new Map<string, { id: number; webUrl: string | null }>();
   for (const p of filtered) {
@@ -351,15 +337,11 @@ export async function runFindMatches(
     }
   }
 
-  // Order matters for a stable, human-friendly report: entries that came back
-  // in `results` first, then any scanned repo that had zero matches or an
-  // error (so the report still shows it was searched).
+  // Results first, then zero-match/error scanned repos, so report lists everything searched.
   const repositories: ReportRepository[] = [];
   const seen = new Set<string>();
   for (const r of results) {
-    if (seen.has(r.projectName)) {
-      continue;
-    }
+    if (seen.has(r.projectName)) continue;
     seen.add(r.projectName);
     const error = repoErrors.get(r.projectName) ?? null;
     repositories.push({
@@ -374,9 +356,7 @@ export async function runFindMatches(
     });
   }
   for (const repo of scanned) {
-    if (seen.has(repo.name)) {
-      continue;
-    }
+    if (seen.has(repo.name)) continue;
     seen.add(repo.name);
     const error = repoErrors.get(repo.name) ?? null;
     repositories.push({
@@ -390,11 +370,18 @@ export async function runFindMatches(
       results: [],
     });
   }
+  return repositories;
+}
 
-  const report2 = buildReport(resolved, strings, repositories);
-
-  // E.14 — total files that passed both filters across all repos; fed to
-  // renderReportTxt for the stdout-only "проанализировано файлов: N" line.
+// Render the report payload, write it to the resolved output path (mkdir parent
+// recursively), and return both path and payload (payload for optional --stdout).
+async function writeOutput(
+  resolved: ResolvedFindMatchesOptions,
+  reportPayload: Report,
+  strings: string[],
+  metrics: SearchMetrics,
+): Promise<{ outputPath: string; payload: string }> {
+  // E.14 — total files that passed both filters across all repos; stdout-only.
   const totalFilesScanned = metrics.perRepo.reduce(
     (acc, t) => acc + t.filesScanned,
     0,
@@ -402,46 +389,88 @@ export async function runFindMatches(
 
   const payload =
     resolved.format === 'txt'
-      ? renderReportTxt(report2, totalFilesScanned)
-      : JSON.stringify(report2, null, 2);
+      ? renderReportTxt(reportPayload, totalFilesScanned)
+      : JSON.stringify(reportPayload, null, 2);
 
-  // Resolve the target file: explicit --output, else auto name with
-  // versioning. When --stdout is set we also emit to stdout.
   const outputPath = resolveOutputPath(resolved.output, resolved.format, formatDate());
-  let wroteFile = false;
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, payload, 'utf-8');
 
-  if (outputPath) {
-    // Ensure the parent directory exists, recursively. `--output ./a/b/c.json`
-    // creates `./a`, `./a/b`, and `./a/b/c.json` in one shot — saves the user
-    // from having to mkdir before every scan, and keeps batch scripts tidy.
-    // `{ recursive: true }` is a no-op when the directory already exists, so
-    // it's safe to call unconditionally. `dirname('foo.json')` returns '.',
-    // and `mkdir('.', { recursive: true })` is also a no-op.
-    await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, payload, 'utf-8');
-    wroteFile = true;
-  }
+  return { outputPath, payload };
+}
 
-  // Итоговая сводка-блок (вместо одиночной строки «Wrote N repo(s) to …»).
-  // Сводка печатается всегда; условна только строка `✓ Отчёт:` (путь есть лишь
-  // когда файл реально записан, `outputPath` может быть `undefined`).
+// Final run-scope summary block on stderr: scanned count, optional errors, report path.
+function printRunSummary(
+  repositories: ReportRepository[],
+  outputPath: string,
+): void {
   const errored = repositories.filter((r) => r.error !== null);
-  progress.static(''); // разделитель между поиском и сводкой
-  progress.static(green(`✓ Отсканировано репозиториев: ${repositories.length}`));
+  progress.static(''); // separator between the search and the summary
+  progress.static(green(`✓ Scanned repositories: ${repositories.length}`));
   if (errored.length > 0) {
-    progress.static(yellow(`⚠ Из них с ошибкой: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`));
+    progress.static(yellow(`⚠ Of which errored: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`));
   }
-  if (outputPath) {
-    progress.static(green(`✓ Отчёт: ${outputPath}`));
-  }
+  progress.static(green(`✓ Report: ${outputPath}`));
+}
 
-  // Metrics summary (stderr) + optional --metrics-file write, at the normal
-  // end of the run.
-  await writeSummaryRecord('complete');
+/**
+ * Internal: shared implementation invoked by the commander action handler.
+ *
+ * Exported separately so tests can drive the full pipeline (resolve options →
+ * fetch repo list → run search → build report → write output) without
+ * spawning a child process.
+ *
+ * @returns Object containing the parsed report and the resolved output path.
+ * @throws {Error} When one or more required options cannot be resolved from
+ *   any source, or when `--format` conflicts with an explicit `--output`
+ *   path extension.
+ */
+export async function runFindMatches(
+  strings: string[],
+  opts: FindMatchesCliOptions,
+): Promise<{ report: Report; outputPath: string }> {
+  // Run-scope timing anchor. Must be the FIRST statement so totalWallMs
+  // captures the whole run (config load, list fetch, search, report write).
+  const startedAt = new Date();
+  const { resolved } = await prepareRun(strings, opts);
+
+  // Run-scope metrics accumulator + heap sampled at start (diffed at the end).
+  const metrics: SearchMetrics = {
+    list: { listMs: 0, pagesFetched: 0, reposFound: 0 },
+    perRepo: [],
+    summary: {},
+  };
+  const heapBefore = process.memoryUsage().heapUsed;
+  const writeSummary = (reason: 'complete' | 'cancel' | 'no-repos') =>
+    writeSummaryRecord(startedAt, metrics, heapBefore, resolved, reason);
+
+  // Handed to findMatches via projects so it doesn't re-fetch the list.
+  const allProjects = await fetchRepoList(resolved.repoNameFilter, metrics);
+  const { repos, filtered, selectedRepos } = await resolveReposToScan(
+    allProjects,
+    resolved,
+    writeSummary,
+  );
+
+  const { results, repoErrors } = await runSearchWithProgress(
+    strings,
+    resolved,
+    filtered,
+    selectedRepos,
+    repos,
+    metrics,
+  );
+
+  const repositories = assembleReport(results, repoErrors, filtered, selectedRepos, repos);
+  const report = buildReport(resolved, strings, repositories);
+  const { outputPath, payload } = await writeOutput(resolved, report, strings, metrics);
+
+  printRunSummary(repositories, outputPath);
+  await writeSummary('complete');
 
   if (resolved.stdout) {
     process.stdout.write(`${payload}\n`);
   }
 
-  return { report: report2, outputPath: wroteFile ? outputPath : undefined };
+  return { report, outputPath };
 }

@@ -286,7 +286,7 @@ describe('runFindMatches (exported helper)', () => {
     const result = await runFindMatches(['x'], {});
 
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('Будет выполнен поиск по 3 репозиториям:');
+    expect(stderrText).toContain('Search will run across 3 repositories:');
     expect(stderrText).toContain('alpha');
     expect(stderrText).toContain('beta');
     expect(stderrText).toContain('skip');
@@ -321,7 +321,7 @@ describe('runFindMatches (exported helper)', () => {
       await vi.advanceTimersByTimeAsync(150);
 
       const duringFetch = collectWriteCalls(stderrSpy);
-      expect(duringFetch).toContain('Получение списка репозиториев…');
+      expect(duringFetch).toContain('Fetching repository list...');
 
       resolveProjects([]);
       await runPromise
@@ -335,7 +335,7 @@ describe('runFindMatches (exported helper)', () => {
 
       expect(exitSpy).toHaveBeenCalledWith(0);
       const afterText = collectWriteCalls(stderrSpy);
-      expect(afterText).toMatch(/не найдены|фильтр|исключени/i);
+      expect(afterText).toMatch(/no repositories|filter|exclus/i);
     } finally {
       vi.useRealTimers();
       exitSpy.mockRestore();
@@ -543,7 +543,7 @@ describe('runFindMatches (exported helper)', () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(mocks.findMatches).not.toHaveBeenCalled();
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toMatch(/поиск|репозитори|cancel|отмен|ничего/i);
+    expect(stderrText).toMatch(/search|cancel|repositor|nothing/i);
     exitSpy.mockRestore();
   });
 
@@ -573,10 +573,10 @@ describe('runFindMatches (exported helper)', () => {
     expect(mocks.findMatches).not.toHaveBeenCalled();
     expect(mocks.writeFile).not.toHaveBeenCalled();
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toMatch(/не найдены|фильтр|исключени/i);
+    expect(stderrText).toMatch(/no repositories|filter|exclus/i);
     // No misleading "searching 0 repos" phase or summary.
-    expect(stderrText).not.toContain('Начинаю поиск по 0');
-    expect(stderrText).not.toContain('Отсканировано репозиториев: 0');
+    expect(stderrText).not.toContain('Starting search across 0');
+    expect(stderrText).not.toContain('Scanned repositories: 0');
     exitSpy.mockRestore();
   });
 
@@ -593,11 +593,11 @@ describe('runFindMatches (exported helper)', () => {
     await loggerModule.flushLogs();
 
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('ℹ Получение списка репозиториев');
-    expect(stderrText).toContain('Список репозиториев получен: 1');
-    expect(stderrText).toContain('ℹ Начинаю поиск по 1 репозиториям');
+    expect(stderrText).toContain('ℹ Fetching repository list');
+    expect(stderrText).toContain('Repository list fetched: 1');
+    expect(stderrText).toContain('ℹ Starting search across 1 repositories');
     // success completion — always visible
-    expect(stderrText).toContain('✓ Поиск завершён.');
+    expect(stderrText).toContain('✓ Search finished.');
   });
 
   it('prints a summary block with ⚠ errored repos and the report path', async () => {
@@ -627,11 +627,11 @@ describe('runFindMatches (exported helper)', () => {
     await loggerModule.flushLogs();
 
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('✓ Отсканировано репозиториев: 2');
-    expect(stderrText).toContain('⚠ Из них с ошибкой: 1 (bad)');
-    expect(stderrText).toContain('✓ Отчёт: /tmp/out.json');
+    expect(stderrText).toContain('✓ Scanned repositories: 2');
+    expect(stderrText).toContain('⚠ Of which errored: 1 (bad)');
+    expect(stderrText).toContain('✓ Report: /tmp/out.json');
     // blank separator line between the search output and the summary block
-    expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Отсканировано репозиториев: 2/);
+    expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Scanned repositories: 2/);
   });
 
   describe('performance metrics (--metrics-file + stderr summary)', () => {
@@ -715,7 +715,7 @@ describe('runFindMatches (exported helper)', () => {
       expect(result.report).toBeTruthy();
       expect(result.outputPath).toBeTruthy();
       await loggerModule.flushLogs();
-      expect(collectWriteCalls(stderrSpy)).toContain('Не удалось записать файл метрик (');
+      expect(collectWriteCalls(stderrSpy)).toContain('Failed to write metrics file (');
     });
 
     it('writes run+summary with exitReason=cancel on interactive empty selection', async () => {

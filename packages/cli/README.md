@@ -201,22 +201,22 @@ into **levels**, each with its own symbol and color:
 | Level | Symbol / color | Visible | Typical use |
 |---|---|---|---|
 | `debug` | `[debug]` gray | only with `--enable-logs` | per-file detail: archive download, unzip steps |
-| `info` | `ℹ` cyan | always | phase boundaries: "Получение списка…", "Начинаю поиск…" |
-| `success` | `✓` green | always | completions: "Готово: repo", "Поиск завершён.", final summary |
-| `warn` | `⚠` yellow | always | recoverable problems: "Архив не получен", "репо раздуто" |
+| `info` | `ℹ` cyan | always | phase boundaries: "Fetching repository list…", "Starting search…" |
+| `success` | `✓` green | always | completions: "Done: repo", "Search finished.", final summary |
+| `warn` | `⚠` yellow | always | recoverable problems: "Archive not fetched", "repo bloated" |
 | `error` | `✗` red | always | fatal CLI errors |
 
 `--enable-logs` (or `--interactive`) still turns on the full `[debug]` trace;
 `info`/`success`/`warn` are shown regardless for a readable default run. Blank
 lines separate the phases (list → search → summary), and the run ends with a
-summary block: `✓ Отсканировано репозиториев: N`, an optional `⚠ Из них с
-ошибкой: K (repos…)` line, and `✓ Отчёт: path`. Durations use a latin `s`
+summary block: `✓ Scanned repositories: N`, an optional `⚠ Of which errored:
+K (repos…)` line, and `✓ Report: path`. Durations use a latin `s`
 (`0.3s`). Colors respect `NO_COLOR` and auto-detect a TTY; there is no
 `--no-color` flag (set `NO_COLOR=1` instead).
 
 If no repositories match the filters (`--repo-filter` / `--exclude`), the run
-stops early with `ℹ Репозитории не найдены: фильтр/исключения не дали
-результатов.` and exits `0` — it does not start a meaningless zero-repo
+stops early with `ℹ No repositories found: filters/exclusions produced no
+results.` and exits `0` — it does not start a meaningless zero-repo
 search or print an empty summary.
 
 ## Exporting results
@@ -233,7 +233,7 @@ gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
 ## Performance metrics
 
 Every run prints a compact `Metrics:` summary line to **stderr** right after the
-`✓ Отсканировано…` block — run-level aggregates only, so the normal run stays
+`✓ Scanned…` block — run-level aggregates only, so the normal run stays
 uncluttered:
 
 ```

@@ -15,4 +15,4 @@ export { findStrInZip } from './commands/find-matches.ts';
 export { ProgressRenderer } from './utils/progress.ts';
 export type { GitlabAnalyzerConfig } from './config/schema.ts';
 export type { SearchProjectsItem } from './types.ts';
-export type { RepoTiming, SearchMetrics } from './commands/find-matches.ts';
+export type { RepoTiming, SearchMetrics } from './commands/find-matches.types.ts';
