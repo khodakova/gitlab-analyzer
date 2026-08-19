@@ -161,7 +161,7 @@ export function renderReportTxt(report: Report, filesScanned?: number): string {
   );
   // E.14 — stdout-only summary of files that passed both filters. NOT part
   // of the Report metadata / JSON file shape.
-  lines.push(`проанализировано файлов: ${filesScanned ?? 0}`);
+  lines.push(`files analyzed: ${filesScanned ?? 0}`);
   lines.push('');
 
   for (const repo of repositories) {

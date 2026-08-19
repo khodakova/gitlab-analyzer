@@ -129,7 +129,7 @@ async function writeSummaryRecord(
     await writeFile(resolved.metricsFile, `${lines.join('\n')}\n`, 'utf-8');
   } catch (err) {
     logger.warn(
-      `Не удалось записать файл метрик (${resolved.metricsFile}): ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to write metrics file (${resolved.metricsFile}): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -180,13 +180,13 @@ async function fetchRepoList(
   metrics: SearchMetrics,
 ): Promise<SearchProjectsItem[]> {
   const fetchReposTimer = setInterval(() => {
-    progress.spin('Получение списка репозиториев...');
+    progress.spin('Fetching repository list...');
   }, 150);
 
   try {
-    logger.info(`Получение списка репозиториев (repoNameFilter='${repoNameFilter ?? ''}')...`);
+    logger.info(`Fetching repository list (repoNameFilter='${repoNameFilter ?? ''}')...`);
     const allProjects = await getAllProjects(repoNameFilter, metrics.list);
-    logger.info(`Список репозиториев получен: ${allProjects.length}`);
+    logger.info(`Repository list fetched: ${allProjects.length}`);
     return allProjects;
   } finally {
     clearInterval(fetchReposTimer);
@@ -223,22 +223,22 @@ async function resolveReposToScan(
 
     if (selectedRepos.length === 0) {
       await writeSummary('cancel');
-      report('Поиск отменён: не выбрано ни одного репозитория.');
+      report('Search cancelled: no repositories selected.');
       await flushLogs();
       process.exit(0);
     }
   } else {
     // Headless empty filter → stop early; not an error, just nothing matched.
     if (repos.length === 0) {
-      logger.info('Репозитории не найдены: фильтр/исключения не дали результатов.');
+      logger.info('No repositories found: filters/exclusions produced no results.');
       await writeSummary('no-repos');
       await flushLogs();
       process.exit(0);
     }
     // Headless info output: show where the search will run (stderr, so stdout
     // report stays clean/pipeable).
-    progress.static(''); // разделитель между фазой получения списка и поиском
-    report(`Будет выполнен поиск по ${repos.length} репозиториям:`);
+    progress.static(''); // separator between the list-fetch and search phases
+    report(`Search will run across ${repos.length} repositories:`);
     for (const repo of repos) {
       report(repo.name);
     }
@@ -309,9 +309,9 @@ async function runSearchWithProgress(
 
   let results: MatchResult[];
   try {
-    logger.info(`Начинаю поиск по ${scannedCount} репозиториям… (concurrency=${resolved.concurrency})`);
+    logger.info(`Starting search across ${scannedCount} repositories… (concurrency=${resolved.concurrency})`);
     results = await findMatches(findOpts);
-    logger.success('Поиск завершён.');
+    logger.success('Search finished.');
   } finally {
     // Both normal path (onProgress already finished) and exceptional path.
     clearInterval(spinnerTimer);
@@ -405,12 +405,12 @@ function printRunSummary(
   outputPath: string,
 ): void {
   const errored = repositories.filter((r) => r.error !== null);
-  progress.static(''); // разделитель между поиском и сводкой
-  progress.static(green(`✓ Отсканировано репозиториев: ${repositories.length}`));
+  progress.static(''); // separator between the search and the summary
+  progress.static(green(`✓ Scanned repositories: ${repositories.length}`));
   if (errored.length > 0) {
-    progress.static(yellow(`⚠ Из них с ошибкой: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`));
+    progress.static(yellow(`⚠ Of which errored: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`));
   }
-  progress.static(green(`✓ Отчёт: ${outputPath}`));
+  progress.static(green(`✓ Report: ${outputPath}`));
 }
 
 /**

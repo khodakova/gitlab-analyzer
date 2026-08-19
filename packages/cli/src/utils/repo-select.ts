@@ -50,7 +50,7 @@ export const enquirerRepoSelect: RepoSelectPrompt = async (repos) => {
     type: 'multiselect',
     name: 'repos',
     message:
-      'Выберите репозитории, по которым будет выполнен поиск (↑/↓ — прокрутка, пробел — отметить/снять, Enter — подтвердить)',
+      'Select the repositories to search (↑/↓ — scroll, space — toggle, Enter — confirm)',
     choices: repos.map((repo) => ({
       name: repo.name,
     })),

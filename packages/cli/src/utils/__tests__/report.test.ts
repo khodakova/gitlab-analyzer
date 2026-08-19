@@ -139,16 +139,16 @@ describe('report > renderReportTxt', () => {
     expect(txt).toContain('File exclude: (none)');
   });
 
-  it('includes `проанализировано файлов: N` line in stdout only', () => {
+  it('includes `files analyzed: N` line in stdout only', () => {
     const txt = renderReportTxt(report, 42);
-    expect(txt).toContain('проанализировано файлов: 42');
+    expect(txt).toContain('files analyzed: 42');
 
     // And the string is NOT in the JSON serialization (stdout-only field).
-    expect(JSON.stringify(report)).not.toContain('проанализировано файлов');
+    expect(JSON.stringify(report)).not.toContain('files analyzed');
   });
 
   it('falls back to 0 when filesScanned is not passed', () => {
     const txt = renderReportTxt(report);
-    expect(txt).toContain('проанализировано файлов: 0');
+    expect(txt).toContain('files analyzed: 0');
   });
 });
