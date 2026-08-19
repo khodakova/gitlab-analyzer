@@ -1,42 +1,28 @@
-export const getQueryString = (obj: Record<string, unknown> = {}): string => {
-  const params: string[][] = [];
+/**
+ * Build a query string from an object, using `URLSearchParams`.
+ *
+ * - `null` / `undefined` values are omitted.
+ * - Array values become repeated parameters (multi-select); objects are
+ *   unwrapped to their `value` property; empty/null items are skipped.
+ * - Everything else is coerced with `String()`.
+ */
+export const getUrlSearchParams = (obj: Record<string, unknown> = {}): string => {
+  const params = new URLSearchParams();
 
-  Object.entries(obj)
-    .map(([k, v]) => {
-      if (v == null) {
-        return [k, ''];
-      }
-      if (typeof v === 'string') {
-        return [k, v];
-      }
-      if (typeof v === 'number') {
-        return [k, String(v)];
-      }
-      if (typeof v === 'boolean') {
-        return [k, String(v)];
-      }
+  for (const [key, value] of Object.entries(obj)) {
+    if (value == null) continue;
 
-      return [k, ''];
-    }).forEach((x) => params.push(x as string[]));
-
-  // if the field value is an array (e.g. from a multi-select)
-  Object.entries(obj).forEach(([k, v]) => {
-    if (Array.isArray(v)) {
-      const p = v.map((x) => {
-        if (typeof x === 'object' && 'value' in x) {
-          return x.value;
-        }
-        return x;
-      })
-        .filter((x) => x !== '')
-        .filter((x) => x != null);
-
-      p.forEach((x) => {
-        params.push([k, x]);
-      });
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item == null || item === '') continue;
+        const scalar = typeof item === 'object' && 'value' in item ? item.value : item;
+        params.append(key, String(scalar));
+      }
+      continue;
     }
-  });
 
-  const paramsNotEmpty = params.filter(([, v]) => v !== '' && v != null);
-  return new URLSearchParams(paramsNotEmpty).toString();
+    params.append(key, String(value));
+  }
+
+  return params.toString();
 };

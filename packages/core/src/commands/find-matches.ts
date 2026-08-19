@@ -27,11 +27,6 @@ function compileFileFilters(opts: FindMatchesOptions): CompiledFileFilters {
   };
 }
 
-/** Build the p-limit concurrency limiter. */
-function createLimiter(opts: FindMatchesOptions) {
-  return pLimit(opts.concurrency ?? 5);
-}
-
 /**
  * Order projects by `repository_size` ascending. Small repos go first so giant
  * ones don't hold p-limit slots while small ones are still running (~25–30s
@@ -346,6 +341,6 @@ async function runSearch(
 export async function findMatches(opts: FindMatchesOptions): Promise<MatchResult[]> {
   const filters = compileFileFilters(opts);
   const candidateProjects = await fetchCandidateProjects(opts);
-  const limit = createLimiter(opts);
+  const limit = pLimit(opts.concurrency ?? 5);
   return runSearch(candidateProjects, opts, filters, limit);
 }

@@ -1,4 +1,4 @@
-import { getQueryString } from './get-query-string.ts';
+import { getUrlSearchParams } from './get-query-string.ts';
 import { axiosErrorBody, axiosInstance } from '../api/config.ts';
 import { SearchProjectsItem } from '../types.ts';
 import axios from 'axios';
@@ -6,7 +6,7 @@ import { red } from 'colorette';
 import { logger } from './logger.ts';
 
 async function getProjectsByNamespaceQuery(params: { search?: string | null, page?: number, perPage?: number }) {
-  const query = getQueryString({
+  const query = getUrlSearchParams({
     search: params?.search || '',
     simple: false,
     statistics: true,
