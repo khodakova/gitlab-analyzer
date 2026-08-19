@@ -2,10 +2,10 @@ import { axiosInstance } from './config.ts';
 import axios from 'axios';
 
 /**
- * Запрашивает у GitLab default-ветку репозитория (нужна как источник для новой ветки).
+ * Asks GitLab for the repository's default branch (needed as the source for a new branch).
  *
- * @param repoId идентификатор проекта в GitLab.
- * @returns имя default-ветки.
+ * @param repoId project identifier in GitLab.
+ * @returns name of the default branch.
  */
 async function getDefaultBranch(repoId: number): Promise<string> {
   try {
@@ -13,7 +13,7 @@ async function getDefaultBranch(repoId: number): Promise<string> {
       `/api/v4/projects/${encodeURIComponent(repoId)}`,
     );
     if (!data.default_branch) {
-      throw new Error('У проекта не задана default branch');
+      throw new Error('The project has no default branch set');
     }
     return data.default_branch;
   } catch (e) {
@@ -25,11 +25,11 @@ async function getDefaultBranch(repoId: number): Promise<string> {
 }
 
 /**
- * Проверяет существование ветки в репозитории. Если её нет — создаёт от `fromRef`.
+ * Checks whether a branch exists in the repository. If it does not — creates it from `fromRef`.
  *
- * @param repoId идентификатор проекта.
- * @param branch имя ветки, которую нужно обеспечить.
- * @param fromRef ветка/тег, от которой создаётся новая ветка, если её ещё нет.
+ * @param repoId project identifier.
+ * @param branch name of the branch to ensure.
+ * @param fromRef branch/tag from which a new branch is created if it does not exist yet.
  */
 export async function ensureOrCreateBranch(repoId: number, branch: string, fromRef: string): Promise<void> {
   try {

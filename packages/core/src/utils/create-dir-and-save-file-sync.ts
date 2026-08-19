@@ -10,40 +10,40 @@ import { logger } from './logger.ts';
  *
  * @example
  * ```
- * // Использование
+ * // Usage
  * try {
  *   const savedPath = createDirAndSaveFileSync(
  *     './my-files/docs',
  *     'example.txt',
- *     'Привет, это содержимое файла!'
+ *     'Hello, this is the file content!'
  *   );
- *   console.log(`Файл создан по пути: ${savedPath}`);
+ *   console.log(`File created at path: ${savedPath}`);
  * } catch (error) {
- *   console.error('Не удалось создать файл:', error);
+ *   console.error('Failed to create file:', error);
  * }
  * ```
  */
 export function createDirAndSaveFileSync(dirPath: string, fileName: string, fileContent: string): string {
   try {
-    // Проверяем существование директории
+    // Check whether the directory exists
     if (!fs.existsSync(dirPath)) {
-      // Создаем директорию рекурсивно
+      // Create the directory recursively
       fs.mkdirSync(dirPath, { recursive: true });
-      logger.debug(`Директория создана: ${dirPath}`);
+      logger.debug(`Directory created: ${dirPath}`);
     } else {
-      logger.debug(`Директория уже существует: ${dirPath}`);
+      logger.debug(`Directory already exists: ${dirPath}`);
     }
 
-    // Полный путь к файлу
+    // Full path to the file
     const filePath = path.join(dirPath, fileName);
 
-    // Записываем файл
+    // Write the file
     fs.writeFileSync(filePath, fileContent, 'utf8');
-    logger.debug(`Файл сохранен: ${filePath}`);
+    logger.debug(`File saved: ${filePath}`);
 
     return filePath;
   } catch (error) {
-    logger.error(`Ошибка: ${(error as Error).message}`);
+    logger.error(`Error: ${(error as Error).message}`);
     throw error;
   }
 }

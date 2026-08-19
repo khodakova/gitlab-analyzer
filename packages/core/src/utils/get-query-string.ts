@@ -19,7 +19,7 @@ export const getQueryString = (obj: Record<string, unknown> = {}): string => {
       return [k, ''];
     }).forEach((x) => params.push(x as string[]));
 
-  // если значение поля - массив (например из мультиселекта)
+  // if the field value is an array (e.g. from a multi-select)
   Object.entries(obj).forEach(([k, v]) => {
     if (Array.isArray(v)) {
       const p = v.map((x) => {

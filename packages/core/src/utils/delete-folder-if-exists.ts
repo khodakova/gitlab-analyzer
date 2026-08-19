@@ -5,12 +5,12 @@ export async function deleteFolderIfExists(path: string) {
   try {
     await fs.access(path);
     await fs.rm(path, { recursive: true, force: true });
-    logger.debug(`Папка ${path} успешно удалена`);
+    logger.debug(`Folder ${path} successfully deleted`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      logger.debug(`Папка ${path} не существует`);
+      logger.debug(`Folder ${path} does not exist`);
     } else {
-      logger.error(`Ошибка при удалении папки: ${String(error)}`);
+      logger.error(`Error deleting folder: ${String(error)}`);
     }
   }
 }

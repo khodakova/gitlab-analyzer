@@ -34,7 +34,7 @@ export async function getAllProjects(
     .catch((err) => {
       if (axios.isAxiosError(err) && err.response) {
         const errorText = `${err.response.status} ${err.response.statusText}${axiosErrorBody(err)}`;
-        const message = `${red('При получении списка репозиториев возникла ошибка:')}\n${errorText}`
+        const message = `${red('An error occurred while fetching the repository list:')}\n${errorText}`
         throw new Error(message);
       }
       return [[], 0]
@@ -55,7 +55,7 @@ export async function getAllProjects(
     ...resultsOnRestPages,
   ];
 
-  logger.debug(`Найдено репозиториев: ${projects.length}`);
+  logger.debug(`Repositories found: ${projects.length}`);
 
   if (metrics) {
     // Actual count of pages fetched during pagination: page 1 plus every
