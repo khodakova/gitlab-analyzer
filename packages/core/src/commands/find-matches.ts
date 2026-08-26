@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import picomatch from 'picomatch';
 import pLimit from 'p-limit';
+import { basename } from 'node:path';
 import { getProjectArchive, getProjectRepositorySize } from '../api/project-archive.ts';
 import { getAllProjects } from '../utils/get-projects.ts';
 import { logger, isLoggingEnabled } from '../utils/logger.ts';
@@ -16,14 +17,29 @@ import type {
   ScanMetrics,
 } from './find-matches.types.ts';
 
+/**
+ * Compile a single file filter pattern into a matcher. Patterns WITHOUT a
+ * slash match by basename (so `values.yaml.gotmpl` finds the file in any
+ * directory); patterns WITH a slash match the full archive path (which keeps
+ * its leading `/`). The picomatch matcher is compiled once, outside the
+ * returned closure, so it isn't rebuilt per file.
+ */
+function compileMatcher(pattern: string): (path: string) => boolean {
+  const isMatch = picomatch(pattern);
+  if (pattern.includes('/')) {
+    return isMatch;
+  }
+  return (path) => isMatch(basename(path));
+}
+
 /** Compile the glob patterns from `opts` into matchers, reused across all archives. */
 function compileFileFilters(opts: FindMatchesOptions): CompiledFileFilters {
   // picomatch silently swallows malformed patterns — we don't add validation (per spec).
   const fileInclude = opts.fileInclude ?? [];
   const fileExclude = opts.fileExclude ?? [];
   return {
-    includeMatchers: fileInclude.map((pattern) => picomatch(pattern)),
-    excludeMatchers: fileExclude.map((pattern) => picomatch(pattern)),
+    includeMatchers: fileInclude.map(compileMatcher),
+    excludeMatchers: fileExclude.map(compileMatcher),
   };
 }
 
@@ -111,8 +127,9 @@ function emitTiming(opts: FindMatchesOptions, timing: RepoTiming): void {
  * @param searchStrings - Substrings to search for (logical OR).
  * @param filters - Pre-compiled `CompiledFileFilters` (already built once in
  *   `findMatches`; this function does NOT recompile). Matchers interpret
- *   `picomatch` defaults (case-sensitive; dotfiles NOT matched) and run
- *   against the full archive path, including its leading `/`.
+ *   `picomatch` defaults (case-sensitive; dotfiles NOT matched). Patterns
+ *   WITH a slash run against the full archive path (including its leading
+ *   `/`); patterns WITHOUT a slash match by basename.
  * @param metrics - Optional mutable accumulator. Filled with the unzip
  *   duration, the scan-loop duration, and aggregated per-file counters
  *   (filesScanned/filesMatched/textLength). Caller is expected to

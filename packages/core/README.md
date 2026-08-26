@@ -580,13 +580,17 @@ Test files are scanned by default — exclude them with
 
 ### Common glob patterns
 
-Paths inside the archive always start with `/` (e.g. `/src/foo.ts`), so patterns must account for that leading slash.
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`).
+
+A pattern **with a slash** matches the full path — so it must account for that
+leading slash (use `**/` to traverse directories). A pattern **without a slash**
+matches by **file name (basename)** in any directory.
 
 | Need | Pattern |
 |---|---|
 | Find test files | `**/*.test.*` |
-| Find a file by its exact name (anywhere) | `**/foo.ts` |
-| Find any `.ts` file | `**/*.ts` |
+| Find a file by its exact name (anywhere) | `foo.ts` or `**/foo.ts` |
+| Find any `.ts` file | `*.ts` or `**/*.ts` |
 | Find files only under `src/` | `**/src/**/*.ts` |
 | Skip node_modules | `**/node_modules/**` |
 

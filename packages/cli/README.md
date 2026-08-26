@@ -74,8 +74,8 @@ gitlab-analyzer find-matches [options] <strings...>
 | `-r, --repo-filter <str>` | Substring filter for project names (passed to GitLab `search=`) | — |
 | `-e, --exclude <list>` | Comma-separated repo names to skip | `[]` |
 | `-b, --branch <name>` | Branch to scan in every project | `develop` |
-| `--file-include <list>` | Comma-separated glob patterns; only files matching at least one pattern are scanned | `[]` (scan all) |
-| `--file-exclude <list>` | Comma-separated glob patterns; matching files are always skipped (wins over `--file-include`) | `[]` |
+| `--file-include <list>` | Comma-separated glob patterns; only files matching at least one pattern are scanned. A pattern without `/` matches by file name (basename) in any directory; with `/` — by full path | `[]` (scan all) |
+| `--file-exclude <list>` | Comma-separated glob patterns; matching files are always skipped (wins over `--file-include`). Same basename/full-path rule as `--file-include` | `[]` |
 | `--format <txt\|json>` | Report format (also drives the file extension) | `json` |
 | `--stdout` | Also write the report to stdout (handy for piping) | off |
 | `-o, --output <path>` | Where to write the report; omit for an auto-generated name | auto-name |
@@ -270,13 +270,17 @@ file is a warning on stderr, never a fatal error — the report is already writt
 
 ### Common glob patterns
 
-Paths inside the archive always start with `/` (e.g. `/src/foo.ts`), so patterns must account for that leading slash.
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`).
+
+A pattern **with a slash** matches the full path — so it must account for that
+leading slash (use `**/` to traverse directories). A pattern **without a slash**
+matches by **file name (basename)** in any directory.
 
 | Need | Pattern |
 |---|---|
 | Find test files | `**/*.test.*` |
-| Find a file by its exact name (anywhere) | `**/foo.ts` |
-| Find any `.ts` file | `**/*.ts` |
+| Find a file by its exact name (anywhere) | `foo.ts` or `**/foo.ts` |
+| Find any `.ts` file | `*.ts` or `**/*.ts` |
 | Find files only under `src/` | `**/src/**/*.ts` |
 | Skip node_modules | `**/node_modules/**` |
 - **Too many requests on a big instance?** Lower `--concurrency 2`.

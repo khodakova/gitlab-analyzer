@@ -32,7 +32,8 @@ import { configureLogger, logger, flushLogs } from '../../utils/logger.ts';
 /**
  * Build a real in-memory ZIP archive (NOT a JSZip mock). Paths MUST use
  * leading slashes (`/src/foo.ts`) to match real GitLab archive structure
- * — picomatch patterns need a leading double-star to traverse dirs.
+ * — patterns with a slash match the full path (leading double-star needed
+ * to traverse dirs); patterns without a slash match by basename.
  */
 async function makeZip(files: Record<string, string>): Promise<ArrayBuffer> {
   const zip = new JSZip();
@@ -182,7 +183,50 @@ describe('findMatches', () => {
       ]);
     });
 
-    it('picomatch semantics: **/*.ts matches /src/foo.ts; *.ts and src/**/*.ts do NOT', async () => {
+    it('fileInclude pattern without a slash matches by basename in any directory', async () => {
+      const archive = await makeZip({
+        '/infrastructure/helm/configs/values.yaml.gotmpl': 'TARGET',
+        '/src/other.yaml': 'TARGET',
+        '/src/values.yaml.gotmpl': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['values.yaml.gotmpl'],
+      });
+
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/infrastructure/helm/configs/values.yaml.gotmpl',
+        '/src/values.yaml.gotmpl',
+      ]);
+    });
+
+    it('fileInclude pattern WITH a slash still matches the full path', async () => {
+      const archive = await makeZip({
+        '/infrastructure/helm/configs/values.yaml.gotmpl': 'TARGET',
+        '/src/values.yaml.gotmpl': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['**/values.yaml.gotmpl'],
+      });
+
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/infrastructure/helm/configs/values.yaml.gotmpl',
+        '/src/values.yaml.gotmpl',
+      ]);
+    });
+
+    it('picomatch semantics: **/*.ts matches /src/foo.ts; src/**/*.ts does NOT; *.ts matches by basename', async () => {
       const archive = await makeZip({
         '/src/a.ts': 'X',
         '/lib/b.ts': 'X',
@@ -191,16 +235,17 @@ describe('findMatches', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      // *.ts does NOT match /src/foo.ts — path keeps its leading /
+      // *.ts has no slash → matches by basename, so it finds both files
       const r1 = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         fileInclude: ['*.ts'],
       });
-      expect(r1[0].results).toEqual([]);
+      expect(r1[0].results.map((m) => m.filename).sort()).toEqual(['/lib/b.ts', '/src/a.ts']);
 
-      // src/**/*.ts does NOT match /src/foo.ts — pattern requires start with
-      // "src" segment, but the path starts with "/"
+      // src/**/*.ts contains a slash → full-path matching; does NOT match
+      // /src/foo.ts — pattern requires start with "src" segment, but the path
+      // starts with "/"
       const r2 = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
@@ -256,6 +301,24 @@ describe('findMatches', () => {
       });
 
       expect(results[0].results.map((m) => m.filename)).toEqual(['/src/foo.ts']);
+    });
+
+    it('fileExclude pattern without a slash skips by basename in any directory', async () => {
+      const archive = await makeZip({
+        '/infrastructure/helm/configs/values.yaml.gotmpl': 'TARGET',
+        '/src/keep.yaml': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileExclude: ['values.yaml.gotmpl'],
+      });
+
+      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/keep.yaml']);
     });
 
     it('exclude wins over include (gitignore-style)', async () => {
