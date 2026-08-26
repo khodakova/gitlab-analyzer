@@ -401,4 +401,52 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (res.ok) expect(res.resolved.metricsFile).toBe('./m.ndjson');
     });
   });
+
+  describe('outputFilter (CLI > config > default "all")', () => {
+    it('defaults to "all" when neither CLI nor config provides it', () => {
+      const res = resolveOptions(['x'], {}, emptyConfig() as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('all');
+    });
+
+    it('--output-filter overrides config.defaults.outputFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, outputFilter: 'found' },
+      };
+      const res = resolveOptions(['x'], { outputFilter: 'not-found' }, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('not-found');
+    });
+
+    it('falls back to config.defaults.outputFilter when CLI is silent', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, outputFilter: 'found' },
+      };
+      const res = resolveOptions(['x'], {}, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('found');
+    });
+
+    it('falls back to config.commands["find-matches"].outputFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        commands: { 'find-matches': { concurrency: 5, outputFilter: 'not-found' } },
+      };
+      const res = resolveOptions(['x'], {}, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('not-found');
+    });
+
+    it('CLI --output-filter wins over config.commands["find-matches"].outputFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        commands: { 'find-matches': { concurrency: 5, outputFilter: 'not-found' } },
+      };
+      const res = resolveOptions(['x'], { outputFilter: 'all' }, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('all');
+    });
+  });
 });

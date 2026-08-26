@@ -95,6 +95,12 @@ export function buildProgram(): Command {
         'Report format. Default: json (also drives the extension of the auto-generated file name).',
       ).choices(['txt', 'json']),
     )
+    .addOption(
+      new Option(
+        '--output-filter <found|not-found|all>',
+        'Which repositories to include in the report file: found = only repos with matches; not-found = only repos without matches; all = everything (default).',
+      ).choices(['found', 'not-found', 'all']),
+    )
     .option(
       '--stdout',
       'Also write the report to stdout (in addition to the file)',

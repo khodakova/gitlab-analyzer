@@ -83,6 +83,7 @@ describe('GitlabAnalyzerConfigSchema', () => {
         excludeRepos: [],
         fileInclude: [],
         fileExclude: [],
+        outputFilter: 'all',
         enableLogs: false,
       });
     });
@@ -167,12 +168,14 @@ describe('GitlabAnalyzerConfigSchema', () => {
           excludeRepos: ['archived-repo', 'wip-repo'],
           fileInclude: ['**/*.ts'],
           fileExclude: ['**/*.test.ts'],
+          outputFilter: 'found',
           enableLogs: true,
         },
         commands: {
           'find-matches': {
             concurrency: 5,
             output: './find-matches-result.json',
+            outputFilter: 'not-found',
           },
         },
       };
@@ -187,15 +190,54 @@ describe('GitlabAnalyzerConfigSchema', () => {
           excludeRepos: ['archived-repo', 'wip-repo'],
           fileInclude: ['**/*.ts'],
           fileExclude: ['**/*.test.ts'],
+          outputFilter: 'found',
           enableLogs: true,
         },
         commands: {
           'find-matches': {
             concurrency: 5,
             output: './find-matches-result.json',
+            outputFilter: 'not-found',
           },
         },
       });
+    });
+  });
+
+  describe('outputFilter', () => {
+    it('defaults to "all" in defaults when omitted', () => {
+      const parsed = GitlabAnalyzerConfigSchema.parse({});
+      expect(parsed.defaults.outputFilter).toBe('all');
+    });
+
+    it('accepts found / not-found / all in defaults', () => {
+      for (const value of ['found', 'not-found', 'all'] as const) {
+        const parsed = GitlabAnalyzerConfigSchema.parse({
+          defaults: { outputFilter: value },
+        });
+        expect(parsed.defaults.outputFilter).toBe(value);
+      }
+    });
+
+    it('rejects an invalid outputFilter value in defaults', () => {
+      expect(() =>
+        GitlabAnalyzerConfigSchema.parse({ defaults: { outputFilter: 'foo' } }),
+      ).toThrow();
+    });
+
+    it('accepts outputFilter in commands.find-matches', () => {
+      const parsed = GitlabAnalyzerConfigSchema.parse({
+        commands: { 'find-matches': { outputFilter: 'found' } },
+      });
+      expect(parsed.commands['find-matches'].outputFilter).toBe('found');
+    });
+
+    it('rejects an invalid outputFilter value in commands.find-matches', () => {
+      expect(() =>
+        GitlabAnalyzerConfigSchema.parse({
+          commands: { 'find-matches': { outputFilter: 'foo' } },
+        }),
+      ).toThrow();
     });
   });
 });

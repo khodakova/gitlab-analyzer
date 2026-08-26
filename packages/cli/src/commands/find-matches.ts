@@ -24,6 +24,7 @@ import { progress, report, renderProgressFrame } from '../utils/progress.ts';
 import {
   resolveOptions,
   type FindMatchesCliOptions,
+  type OutputFilter,
   type ResolvedFindMatchesOptions,
 } from '../utils/options.ts';
 import {
@@ -373,7 +374,28 @@ function assembleReport(
   return repositories;
 }
 
-// Render the report payload, write it to the resolved output path (mkdir parent
+/**
+ * Filter the assembled repository list according to `--output-filter`.
+ *
+ * - `all` → unchanged (every scanned repo, including errors).
+ * - `found` → only repos with `resultsLength > 0` (errors excluded).
+ * - `not-found` → only repos with `resultsLength === 0` (errors excluded).
+ *
+ * Errored repos are dropped from both `found` and `not-found` — an error is
+ * not "no results", it means the repo was never scanned.
+ */
+function applyOutputFilter(
+  repositories: ReportRepository[],
+  outputFilter: OutputFilter,
+): ReportRepository[] {
+  if (outputFilter === 'all') return repositories;
+  return repositories.filter((repo) => {
+    if (repo.error !== null) return false;
+    return outputFilter === 'found'
+      ? repo.resultsLength > 0
+      : repo.resultsLength === 0;
+  });
+}
 // recursively), and return both path and payload (payload for optional --stdout).
 async function writeOutput(
   resolved: ResolvedFindMatchesOptions,
@@ -462,7 +484,13 @@ export async function runFindMatches(
   );
 
   const repositories = assembleReport(results, repoErrors, filtered, selectedRepos, repos);
-  const report = buildReport(resolved, strings, repositories);
+  const filteredRepos = applyOutputFilter(repositories, resolved.outputFilter);
+  if (resolved.outputFilter !== 'all' && filteredRepos.length === 0) {
+    progress.static(
+      yellow(`No repositories matched --output-filter ${resolved.outputFilter}; the report is empty.`),
+    );
+  }
+  const report = buildReport(resolved, strings, filteredRepos);
   const { outputPath, payload } = await writeOutput(resolved, report, strings, metrics);
 
   printRunSummary(repositories, outputPath);

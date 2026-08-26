@@ -634,6 +634,92 @@ describe('runFindMatches (exported helper)', () => {
     expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Scanned repositories: 2/);
   });
 
+  describe('output-filter', () => {
+    const setupRepos = () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      // good = has matches; empty = scanned, no matches; bad = errored.
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'good', description: null },
+        { id: 2, name: 'empty', description: null },
+        { id: 3, name: 'bad', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(async (opts) => {
+        opts.onProgress?.(1, 3, 'good');
+        opts.onProgress?.(2, 3, 'empty');
+        opts.onProgress?.(3, 3, 'bad', 'boom');
+        return [
+          {
+            projectId: 1,
+            projectName: 'good',
+            projectDescription: null,
+            resultsLength: 1,
+            results: [
+              { filename: '/src/a.ts', matches: ['needle'], content: ['needle'] },
+            ],
+          },
+        ];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+    };
+
+    it('--output-filter found keeps only repos with matches (errors excluded)', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], { outputFilter: 'found' });
+      const names = result.report.repositories.map((r) => r.projectName);
+      expect(names).toEqual(['good']);
+    });
+
+    it('--output-filter not-found keeps only repos without matches (errors excluded)', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], { outputFilter: 'not-found' });
+      const names = result.report.repositories.map((r) => r.projectName);
+      expect(names).toEqual(['empty']);
+    });
+
+    it('default (all) keeps every scanned repo including errors', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], {});
+      const names = result.report.repositories.map((r) => r.projectName).sort();
+      expect(names).toEqual(['bad', 'empty', 'good']);
+    });
+
+    it('--output-filter all behaves like the default', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], { outputFilter: 'all' });
+      const names = result.report.repositories.map((r) => r.projectName).sort();
+      expect(names).toEqual(['bad', 'empty', 'good']);
+    });
+
+    it('writes an empty report + warning when no repo matches the filter', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      // Every scanned repo has no matches and no errors → 'found' yields nothing.
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 2, name: 'empty', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(async (opts) => {
+        opts.onProgress?.(1, 1, 'empty');
+        return [];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindMatches(['needle'], { outputFilter: 'found' });
+      expect(result.report.repositories).toEqual([]);
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toMatch(/No repositories matched --output-filter found/);
+      // The report file is still written (empty).
+      expect(mocks.writeFile).toHaveBeenCalled();
+    });
+
+    it('applies the filter to --stdout payload as well', async () => {
+      setupRepos();
+      await runFindMatches(['needle'], { outputFilter: 'found', stdout: true });
+      const stdoutText = collectWriteCalls(stdoutSpy);
+      expect(stdoutText).toContain('good');
+      expect(stdoutText).not.toContain('empty');
+      expect(stdoutText).not.toContain('bad');
+    });
+  });
+
   describe('performance metrics (--metrics-file + stderr summary)', () => {
     it('prints a Metrics stderr summary line even without --metrics-file', async () => {
       mocks.loadConfig.mockResolvedValue(defaultConfig());

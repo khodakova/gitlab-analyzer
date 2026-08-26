@@ -1,6 +1,13 @@
 import type { GitlabAnalyzerConfig } from '@gitlab-analyzer/core/internal';
 
 /**
+ * Which repositories to include in the report file. `all` (default) keeps
+ * every scanned repo; `found` keeps only repos with matches; `not-found`
+ * keeps only repos without matches (errors are excluded from both).
+ */
+export type OutputFilter = 'found' | 'not-found' | 'all';
+
+/**
  * CLI options for the `find-matches` subcommand. Produced by commander and
  * passed into `runFindMatches`.
  *
@@ -33,6 +40,8 @@ export type FindMatchesCliOptions = {
   enableLogs?: boolean;
   format?: 'txt' | 'json';
   stdout?: boolean;
+  /** Which repositories to include in the report file (`found`/`not-found`/`all`). */
+  outputFilter?: OutputFilter;
   /** Path to write performance metrics (NDJSON). Diagnostic; only via CLI flag. */
   metricsFile?: string;
 };
@@ -66,6 +75,8 @@ export type ResolvedFindMatchesOptions = {
   format: 'txt' | 'json';
   /** When true, also write the report to stdout (in addition to the file). */
   stdout: boolean;
+  /** Which repositories to include in the report file (`found`/`not-found`/`all`). */
+  outputFilter: OutputFilter;
   /** Path to write performance metrics (NDJSON); `undefined` → no metrics file. */
   metricsFile: string | undefined;
 };
@@ -172,6 +183,11 @@ export function resolveOptions(
     enableLogs,
     format: cliOpts.format ?? 'json',
     stdout: cliOpts.stdout ?? false,
+    outputFilter:
+      cliOpts.outputFilter ??
+      cmdDefaults?.outputFilter ??
+      config.defaults?.outputFilter ??
+      'all',
     // metricsFile comes ONLY from the CLI flag (diagnostic, opt-in) — never
     // from config or env (spec decision 12).
     metricsFile: cliOpts.metricsFile,
