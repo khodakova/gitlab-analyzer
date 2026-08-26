@@ -36,7 +36,15 @@ export function buildProgram(): Command {
     .description(
       'CLI + library for mass analysis of GitLab repositories (search strings across projects)',
     )
-    .version('0.1.0');
+    .version('0.1.0')
+    .option(
+      '--private-token <value>',
+      'GitLab personal access token. Overrides PRIVATE_TOKEN env. SECURITY: passing a token on the command line exposes it in shell history / process list / CI logs — prefer PRIVATE_TOKEN env (or .env) when possible.',
+    )
+    .option(
+      '--gitlab-url <value>',
+      'Base URL of the GitLab instance. Overrides GITLAB_URL env and gitlab.url config.',
+    );
 
   program
     .command('find-matches')
@@ -117,7 +125,13 @@ export function buildProgram(): Command {
     )
     .action(async (strings: string[], opts: FindMatchesCliOptions) => {
       try {
-        await runFindMatches(strings, opts);
+        const global = program.opts<{ privateToken?: string; gitlabUrl?: string }>();
+        const merged: FindMatchesCliOptions = {
+          ...opts,
+          privateToken: global.privateToken,
+          gitlabUrl: global.gitlabUrl,
+        };
+        await runFindMatches(strings, merged);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error(`Error: ${message}`);

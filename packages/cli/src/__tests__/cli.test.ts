@@ -180,6 +180,72 @@ describe('cli > buildProgram', () => {
     });
   });
 
+  describe('--help on top level', () => {
+    it('shows the global --private-token and --gitlab-url flags', async () => {
+      const program = buildProgram();
+
+      await program
+        .parseAsync(['node', 'gitlab-analyzer', '--help'])
+        .catch((e: unknown) => {
+          if (e instanceof CommanderError) return;
+          throw e;
+        });
+
+      const out = collectWriteCalls(stdoutSpy) + collectWriteCalls(stderrSpy);
+      expect(out).toContain('--private-token');
+      expect(out).toContain('--gitlab-url');
+    });
+  });
+
+  describe('global flags delivery', () => {
+    it('sets axiosInstance baseURL and PRIVATE-TOKEN header from global flags', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--private-token',
+        'cli-token',
+        '--gitlab-url',
+        'https://cli.example.com',
+        '--output',
+        path.join(os.tmpdir(), `cli-flags-${Date.now()}.json`),
+      ]);
+
+      const { axiosInstance } = await import('@gitlab-analyzer/core/internal');
+      expect(axiosInstance.defaults.headers['PRIVATE-TOKEN']).toBe('cli-token');
+      expect(axiosInstance.defaults.baseURL).toBe('https://cli.example.com');
+    });
+
+    it('--private-token overrides PRIVATE_TOKEN env in an end-to-end mock run', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--private-token',
+        'cli-token',
+        '--output',
+        path.join(os.tmpdir(), `cli-token-${Date.now()}.json`),
+      ]);
+
+      const { axiosInstance } = await import('@gitlab-analyzer/core/internal');
+      expect(axiosInstance.defaults.headers['PRIVATE-TOKEN']).toBe('cli-token');
+    });
+  });
+
   describe('parse errors', () => {
     it('throws CommanderError with code commander.unknownOption for unknown flags', async () => {
       const program = buildProgram();

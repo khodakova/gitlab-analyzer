@@ -47,6 +47,7 @@ vi.mock('../../utils/repo-select.ts', () => ({
 
 import { runFindMatches } from '../find-matches.ts';
 import * as loggerModule from '@gitlab-analyzer/core';
+import { axiosInstance } from '@gitlab-analyzer/core/internal';
 
 const TEST_GITLAB_URL = 'https://gitlab.example.com';
 const TEST_PRIVATE_TOKEN = 'test-token-for-vitest';
@@ -100,6 +101,38 @@ describe('runFindMatches (exported helper)', () => {
   afterEach(() => {
     stderrSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  describe('axiosInstance token/URL propagation from CLI flags', () => {
+    it('sets axiosInstance PRIVATE-TOKEN header from --private-token', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], { privateToken: 'cli-token' });
+
+      expect(axiosInstance.defaults.headers['PRIVATE-TOKEN']).toBe('cli-token');
+    });
+
+    it('sets axiosInstance baseURL from --gitlab-url', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], { gitlabUrl: 'https://cli.example.com' });
+
+      expect(axiosInstance.defaults.baseURL).toBe('https://cli.example.com');
+    });
+
+    it('uses the env token when no --private-token flag is passed', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], {});
+
+      expect(axiosInstance.defaults.headers['PRIVATE-TOKEN']).toBe(TEST_PRIVATE_TOKEN);
+    });
   });
 
   it('merges CLI options with config defaults and forwards to findMatches', async () => {

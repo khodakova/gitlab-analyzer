@@ -172,6 +172,10 @@ async function prepareRun(
   // `axiosInstance.defaults.baseURL` matches `resolved.gitlabUrl` and this
   // assignment is a no-op.
   axiosInstance.defaults.baseURL = resolved.gitlabUrl;
+  // Propagate the resolved GitLab token to the module-level axiosInstance so
+  // requests carry the effective token (CLI `--private-token` > PRIVATE_TOKEN
+  // env). `resolveOptions` guarantees `resolved.privateToken` is non-empty.
+  axiosInstance.defaults.headers['PRIVATE-TOKEN'] = resolved.privateToken;
 
   return { resolved };
 }

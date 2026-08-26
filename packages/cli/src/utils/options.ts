@@ -44,6 +44,10 @@ export type FindMatchesCliOptions = {
   outputFilter?: OutputFilter;
   /** Path to write performance metrics (NDJSON). Diagnostic; only via CLI flag. */
   metricsFile?: string;
+  /** From global `--private-token`. Overrides PRIVATE_TOKEN env. */
+  privateToken?: string;
+  /** From global `--gitlab-url`. Overrides GITLAB_URL env and gitlab.url config. */
+  gitlabUrl?: string;
 };
 
 /**
@@ -53,6 +57,8 @@ export type FindMatchesCliOptions = {
 export type ResolvedFindMatchesOptions = {
   /** Base URL of the GitLab instance (from `GITLAB_URL` env or `gitlab.url` config). */
   gitlabUrl: string;
+  /** Effective GitLab token (CLI > env). Config never (security policy). */
+  privateToken: string;
   /** Branch to scan. */
   branch: string;
   /** Substring filter for project names (optional). */
@@ -102,9 +108,10 @@ export type ResolveResult =
  *
  * Required (must be present from at least one source):
  *
- *   - `gitlabUrl`  — from `GITLAB_URL` env (via dotenv-loaded `.env`) or
- *                    `gitlab.url` in `gitlab-analyzer.json`
- *   - `PRIVATE_TOKEN` — from env only; intentionally NEVER read from config
+ *   - `gitlabUrl`  — from `--gitlab-url` CLI flag, `GITLAB_URL` env (via
+ *                    dotenv-loaded `.env`) or `gitlab.url` in `gitlab-analyzer.json`
+ *   - `PRIVATE_TOKEN` — from `--private-token` CLI flag or env only;
+ *                       intentionally NEVER read from config
  *                       (security policy — see README "Security: tokens")
  *   - At least one positional search string
  *
@@ -119,22 +126,26 @@ export function resolveOptions(
 ): ResolveResult {
   const errors: ResolveError[] = [];
 
-  // Required: gitlabUrl — env first, then config.
-  const gitlabUrl = process.env.GITLAB_URL ?? config.gitlab?.url;
+  // Required: gitlabUrl — CLI flag > env > config.
+  const gitlabUrl =
+    cliOpts.gitlabUrl ?? process.env.GITLAB_URL ?? config.gitlab?.url;
   if (!gitlabUrl) {
     errors.push({
       field: 'gitlabUrl',
       message:
-        'Set GITLAB_URL in the environment (or .env), or add "gitlab.url" to gitlab-analyzer.json.',
+        'Set GITLAB_URL in the environment (or .env), pass --gitlab-url, or add "gitlab.url" to gitlab-analyzer.json.',
     });
   }
 
-  // Required: PRIVATE_TOKEN — env only (security: never read tokens from config).
-  if (!process.env.PRIVATE_TOKEN) {
+  // Required: PRIVATE_TOKEN — CLI flag > env. Config NEVER (security policy).
+  // Empty/whitespace CLI token counts as "not set" (falls through to env).
+  const cliToken = cliOpts.privateToken?.trim();
+  const privateToken = cliToken || process.env.PRIVATE_TOKEN;
+  if (!privateToken) {
     errors.push({
       field: 'PRIVATE_TOKEN',
       message:
-        'Set PRIVATE_TOKEN in the environment (or .env). Tokens are never read from config files.',
+        'Set PRIVATE_TOKEN in the environment (or .env), or pass --private-token. Tokens are never read from config files.',
     });
   }
 
@@ -167,6 +178,7 @@ export function resolveOptions(
 
   const resolved: ResolvedFindMatchesOptions = {
     gitlabUrl: gitlabUrl as string, // safe: gated above; errors[] is non-empty if missing
+    privateToken: privateToken as string, // safe: gated above; errors[] is non-empty if missing
     branch: cliOpts.branch ?? config.defaults?.branch ?? 'develop',
     repoNameFilter:
       cliOpts.repoFilter ?? config.defaults?.repoNameFilter,

@@ -249,6 +249,94 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
     });
   });
 
+  describe('precedence — CLI token/URL flags (--private-token / --gitlab-url)', () => {
+    it('--private-token from CLI overrides PRIVATE_TOKEN env', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: 'cli-token' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('cli-token');
+    });
+
+    it('--gitlab-url from CLI overrides GITLAB_URL env and config.gitlab.url', () => {
+      const config = {
+        ...emptyConfig(),
+        gitlab: { url: 'https://config-gitlab.example.com' },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { gitlabUrl: 'https://cli.example.com' },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://cli.example.com');
+    });
+
+    it('empty --private-token "" falls back to PRIVATE_TOKEN env', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: '' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe(TEST_PRIVATE_TOKEN);
+    });
+
+    it('whitespace --private-token " " falls back to PRIVATE_TOKEN env', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: '   ' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe(TEST_PRIVATE_TOKEN);
+    });
+
+    it('--private-token from CLI satisfies the required check when env is empty', () => {
+      delete process.env.PRIVATE_TOKEN;
+
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: 't' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('t');
+    });
+
+    it('--gitlab-url from CLI satisfies the required check when env and config are empty', () => {
+      delete process.env.GITLAB_URL;
+
+      const result = resolveOptions(
+        ['x'],
+        { gitlabUrl: 'https://cli.example.com' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://cli.example.com');
+    });
+
+    it('trims whitespace around a non-empty CLI token', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: '  padded-token  ' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('padded-token');
+    });
+  });
+
   describe('precedence — enableLogs (CLI > env > config > false)', () => {
     afterEach(() => {
       delete process.env.ENABLE_LOGS;

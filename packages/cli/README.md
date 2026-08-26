@@ -49,7 +49,7 @@ A `.env` is enough — no config file required.
 
    ```ini
    GITLAB_URL=https://gitlab.example.com
-   PRIVATE_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+   PRIVATE_TOKEN=YOUR_TOKEN
    ```
 
 2. Run a search:
@@ -87,6 +87,17 @@ gitlab-analyzer find-matches [options] <strings...>
 
 > Note: if `--format` conflicts with the extension of an explicit `--output` (e.g. `--format txt -o out.json`), the command fails with an error and writes nothing.
 
+### Global flags
+
+These are **top-level** flags (before the subcommand) — `gitlab-analyzer [global flags] find-matches ...`:
+
+| Option | Description | Default |
+|---|---|---|
+| `--private-token <token>` | GitLab personal access token. Overrides `PRIVATE_TOKEN` env | env |
+| `--gitlab-url <url>` | Base URL of the GitLab instance. Overrides `GITLAB_URL` env and `gitlab.url` config | env / config |
+
+> **SECURITY:** passing a token via `--private-token` on the command line exposes it in shell history, the process list, and CI logs. Prefer `PRIVATE_TOKEN` env (or `.env`) as the primary way to supply the token; use the flag only when env is impractical.
+
 ### Examples
 
 **Linux / macOS (bash/zsh):**
@@ -94,6 +105,16 @@ gitlab-analyzer find-matches [options] <strings...>
 ```bash
 # Minimal run (requires .env)
 gitlab-analyzer find-matches 'console.log' 'debugger'
+
+# Token from an environment variable (no .env needed)
+export PRIVATE_TOKEN="$MY_GITLAB_TOKEN"
+export GITLAB_URL="https://gitlab.example.com"
+gitlab-analyzer find-matches 'console.log'
+
+# Or pass the env var straight into the flag for a single run
+gitlab-analyzer find-matches 'console.log' \
+  --private-token "$PRIVATE_TOKEN" \
+  --gitlab-url "$GITLAB_URL"
 
 # Frontend repos only, skipping archives, on your branch, report to a file
 gitlab-analyzer find-matches 'TODO' 'FIXME' \
@@ -131,7 +152,17 @@ gitlab-analyzer find-matches 'TODO' 'FIXME' `
   -o "./results/run-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
 
 # Token set inline
-$env:PRIVATE_TOKEN="glpat-xxxx"; gitlab-analyzer find-matches 'console.log'
+$env:PRIVATE_TOKEN="YOUR_TOKEN"; gitlab-analyzer find-matches 'console.log'
+
+# Token from an environment variable (no .env needed)
+$env:PRIVATE_TOKEN=$env:MY_GITLAB_TOKEN
+$env:GITLAB_URL="https://gitlab.example.com"
+gitlab-analyzer find-matches 'console.log'
+
+# Or pass the env var straight into the flag for a single run
+gitlab-analyzer find-matches 'console.log' `
+  --private-token $env:PRIVATE_TOKEN `
+  --gitlab-url $env:GITLAB_URL
 
 # To stdout, parsed with jq
 gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
@@ -140,11 +171,19 @@ gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
 **Windows (cmd):** line continuation uses `^`, env vars via `set`:
 
 ```bat
-set PRIVATE_TOKEN=glpat-xxxx
+set PRIVATE_TOKEN=YOUR_TOKEN
 gitlab-analyzer find-matches "console.log" "debugger" ^
   --repo-filter "frontend" ^
   --branch develop ^
   -o results.json
+
+:: Token from an environment variable (no .env needed)
+set PRIVATE_TOKEN=%MY_GITLAB_TOKEN%
+set GITLAB_URL=https://gitlab.example.com
+gitlab-analyzer find-matches "console.log"
+
+:: Or pass the env var straight into the flag for a single run
+gitlab-analyzer find-matches "console.log" --private-token %PRIVATE_TOKEN% --gitlab-url %GITLAB_URL%
 ```
 
 ---
@@ -154,13 +193,13 @@ gitlab-analyzer find-matches "console.log" "debugger" ^
 Option resolution precedence (highest wins):
 
 ```
-1. CLI flag                  e.g. --branch main
+1. CLI flag                  e.g. --branch main, --private-token, --gitlab-url
 2. Environment variable      GITLAB_URL, PRIVATE_TOKEN (usually from .env)
 3. gitlab-analyzer.json      defaults.*, commands.find-matches.*, gitlab.url
 4. Built-in default          branch="develop", concurrency=5, fileInclude=[], fileExclude=[]
 ```
 
-A config is useful for **persistent, non-secret** values (branch, exclusions, concurrency, output path). **Never** put tokens in a config — env only.
+A config is useful for **persistent, non-secret** values (branch, exclusions, concurrency, output path). **Never** put tokens in a config — env only (or the `--private-token` CLI flag).
 
 ```json
 {
@@ -285,7 +324,7 @@ matches by **file name (basename)** in any directory.
 | Skip node_modules | `**/node_modules/**` |
 - **Too many requests on a big instance?** Lower `--concurrency 2`.
 - **401 Unauthorized** — check `PRIVATE_TOKEN` (needs `read_api` scope).
-- Tokens are read **only** from env vars / `.env` — never from config.
+- Tokens are read **only** from env vars / `.env` or the `--private-token` CLI flag — never from config.
 
 ## CLI help
 
