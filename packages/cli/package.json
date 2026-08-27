@@ -1,6 +1,6 @@
 {
   "name": "@gitlab-analyzer/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -46,7 +46,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@gitlab-analyzer/core": "0.0.0",
+    "@gitlab-analyzer/core": "0.1.0",
     "colorette": "2.0.20",
     "commander": "15.0.0",
     "enquirer": "^2.4.1"
