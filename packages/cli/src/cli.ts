@@ -5,12 +5,33 @@ import { Command, Option, CommanderError } from 'commander';
 import { fileURLToPath } from 'node:url';
 import { logger, flushLogs } from '@gitlab-analyzer/core';
 import { runFindMatches } from './commands/find-matches.ts';
+import { runListRepos } from './commands/list-repos.ts';
 import type { FindMatchesCliOptions } from './utils/options.ts';
 
 // The thin CLI layer only wires commander to the command implementations.
 // All option resolution, repo fetching, search orchestration, report
 // building/rendering and output writing live in focused utility modules
 // (see `src/utils/` and `src/commands/`).
+
+// Shared comma-list parser for `--exclude` (identical semantics in every
+// subcommand that takes it): trim items, drop empties.
+const parseCommaList = (val: string): string[] =>
+  val
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+/**
+ * Shared error handler for subcommand actions: log the message and terminate
+ * with exit code 1 (runtime error, as opposed to commander's usage errors
+ * handled in {@link runCli}).
+ */
+async function handleActionError(err: unknown): Promise<never> {
+  const message = err instanceof Error ? err.message : String(err);
+  logger.error(`Error: ${message}`);
+  await flushLogs();
+  process.exit(1);
+}
 
 /**
  * Build the top-level commander {@link Command}. Exported so tests can call
@@ -61,11 +82,7 @@ export function buildProgram(): Command {
     .option(
       '-e, --exclude <list>',
       'Comma-separated list of repo names to skip',
-      (val: string) =>
-        val
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0),
+      parseCommaList,
     )
     .option('-b, --branch <name>', 'Branch to scan in every project')
     .option(
@@ -133,10 +150,34 @@ export function buildProgram(): Command {
         };
         await runFindMatches(strings, merged);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error(`Error: ${message}`);
-        await flushLogs();
-        process.exit(1);
+        await handleActionError(err);
+      }
+    });
+
+  program
+    .command('list-repos')
+    .description(
+      'Print the repositories that find-matches would scan with the same filters (repo name filter + exclusions), without running any search',
+    )
+    .addOption(
+      new Option('-r, --repo-filter <str>', 'Substring filter for project names (passed to GitLab search=)'),
+    )
+    .option(
+      '-e, --exclude <list>',
+      'Comma-separated list of repo names to skip',
+      parseCommaList,
+    )
+    .action(async (opts: FindMatchesCliOptions) => {
+      try {
+        const global = program.opts<{ privateToken?: string; gitlabUrl?: string }>();
+        const merged: FindMatchesCliOptions = {
+          ...opts,
+          privateToken: global.privateToken,
+          gitlabUrl: global.gitlabUrl,
+        };
+        await runListRepos(merged);
+      } catch (err) {
+        await handleActionError(err);
       }
     });
 
