@@ -1,5 +1,5 @@
 {
-  "name": "gitlab-analyzer",
+  "name": "@gitlab-analyzer/cli",
   "version": "0.0.0",
   "license": "MIT",
   "type": "module",
