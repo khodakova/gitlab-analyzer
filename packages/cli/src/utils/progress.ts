@@ -25,7 +25,7 @@ export function report(line: string): void {
 /**
  * Compose the live progress frame shown on the single dynamic stderr line.
  *
- * The frame is `Обработано N из M` (N = repos finished, M = total), and when a
+ * The frame is `Processed N of M` (N = repos finished, M = total), and when a
  * repo has been started it is followed by ` · <name>` of the most recently
  * *started* repo — the `onRepoStart` hook reveals which repo is being worked on
  * right now, whereas `onProgress` only fires on completion.
@@ -40,6 +40,6 @@ export function renderProgressFrame(
   total: number,
   lastStarted?: string,
 ): string {
-  const prefix = `Обработано ${done} из ${total}`;
+  const prefix = `Processed ${done} of ${total}`;
   return lastStarted !== undefined ? `${prefix} · ${lastStarted}` : prefix;
 }

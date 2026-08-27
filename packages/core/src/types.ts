@@ -1,7 +1,7 @@
 /**
  * Lightweight identifier for a single GitLab project, used when the caller
  * wants to narrow a search to a specific subset of repositories (e.g. the
- * `selectedRepos` option of `findStrings` or the interactive picker).
+ * `selectedRepos` option of `findMatches` or the interactive picker).
  */
 export type RepoInfo = {
   /** GitLab project ID. */
@@ -39,6 +39,20 @@ export type SearchProjectsItem = {
     avatar_url: unknown,
     web_url: string | null,
   }
+
+  /**
+   * Project statistics block, as the GitLab API returns it with
+   * `simple=false&statistics=true`. Available only when the token has
+   * Reporter+ rights; null — if no rights, undefined —
+   * if the field is absent from the response (old APIs, fixtures).
+   *
+   * repository_size — git history size in bytes (used in
+   * findMatches to prioritize the queue: small first,
+   * giants last). Type number | null — as in getProjectRepositorySize.
+   */
+  statistics?: {
+    repository_size?: number | null;
+  } | null;
 }
 
 export type GetRepositoryFile = {

@@ -149,23 +149,23 @@ describe('ProgressRenderer', () => {
   describe('non-TTY mode (plain newline lines, no rewriting)', () => {
     it('spin prints the frame as a newline-terminated line (no \r, no glyph)', () => {
       const r = renderer(false);
-      r.spin('Обработано 1 из 3');
-      expect(text(r)).toBe('Обработано 1 из 3\n');
+      r.spin('Processed 1 of 3');
+      expect(text(r)).toBe('Processed 1 of 3\n');
     });
 
     it('spin deduplicates an unchanged frame (spinner timer must not spam)', () => {
       const r = renderer(false);
-      r.spin('Обработано 1 из 3');
-      r.spin('Обработано 1 из 3'); // same frame -> no-op
-      expect(text(r)).toBe('Обработано 1 из 3\n');
+      r.spin('Processed 1 of 3');
+      r.spin('Processed 1 of 3'); // same frame -> no-op
+      expect(text(r)).toBe('Processed 1 of 3\n');
     });
 
     it('spin prints a changed frame on a new line', () => {
       const r = renderer(false);
-      r.spin('Обработано 1 из 3');
-      r.spin('Обработано 2 из 3 · Обрабатывается: A');
+      r.spin('Processed 1 of 3');
+      r.spin('Processed 2 of 3 · Processing: A');
       expect(text(r)).toBe(
-        'Обработано 1 из 3\nОбработано 2 из 3 · Обрабатывается: A\n',
+        'Processed 1 of 3\nProcessed 2 of 3 · Processing: A\n',
       );
     });
 
@@ -189,8 +189,8 @@ describe('ProgressRenderer', () => {
     it('finish behaves like static in non-TTY mode', () => {
       const r = renderer(false);
       r.spin('progress');
-      r.finish('Обработано 3 из 3');
-      expect(text(r)).toBe('progress\nОбработано 3 из 3\n');
+      r.finish('Processed 3 of 3');
+      expect(text(r)).toBe('progress\nProcessed 3 of 3\n');
     });
 
     it('end is a no-op', () => {
@@ -207,7 +207,7 @@ describe('ProgressRenderer', () => {
   it('works against the real stderr (integration)', () => {
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const p = new ProgressRenderer(false);
-    p.spin('Обработано 0 из 2');
+    p.spin('Processed 0 of 2');
     p.static('ok');
     expect(spy).toHaveBeenCalled();
   });

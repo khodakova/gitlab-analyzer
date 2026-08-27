@@ -11,18 +11,22 @@ const GitlabSchema = z.object({
   url: z.string().url().optional(),
 }).strict();
 
+const OutputFilterSchema = z.enum(['found', 'not-found', 'all']);
+
 const DefaultsSchema = z.object({
   branch: z.string().default('develop'),
   repoNameFilter: z.string().optional(),
   excludeRepos: z.array(z.string()).default([]),
-  pathFilter: z.string().optional(),
-  includeTests: z.boolean().default(false),
+  fileInclude: z.array(z.string()).default([]),
+  fileExclude: z.array(z.string()).default([]),
+  outputFilter: OutputFilterSchema.default('all'),
   enableLogs: z.boolean().default(false),
 });
 
-const FindStringsCommandSchema = z.object({
+const FindMatchesCommandSchema = z.object({
   concurrency: z.number().int().positive().default(5),
   output: z.string().optional(),
+  outputFilter: OutputFilterSchema.optional(),
 });
 
 export const GitlabAnalyzerConfigSchema = z.object({
@@ -34,15 +38,17 @@ export const GitlabAnalyzerConfigSchema = z.object({
   defaults: DefaultsSchema.default(() => ({
     branch: 'develop',
     excludeRepos: [] as string[],
-    includeTests: false,
+    fileInclude: [] as string[],
+    fileExclude: [] as string[],
+    outputFilter: 'all' as const,
     enableLogs: false,
   })),
   commands: z.object({
-    'find-strings': FindStringsCommandSchema.default(() => ({
+    'find-matches': FindMatchesCommandSchema.default(() => ({
       concurrency: 5,
     })),
   }).default(() => ({
-    'find-strings': { concurrency: 5 },
+    'find-matches': { concurrency: 5 },
   })),
 });
 

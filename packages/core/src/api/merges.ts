@@ -4,8 +4,8 @@ import { axiosErrorBody, axiosInstance } from './config.ts';
 
 
 /**
- * Ищет уже открытый MR из указанной source-ветки — нужно как fallback,
- * если GitLab отказался создавать MR из-за дубля.
+ * Looks up an already-open MR from the given source branch — needed as a fallback
+ * if GitLab refused to create an MR because of a duplicate.
  */
 async function findExistingMr(repoId: number, sourceBranch: string): Promise<string | null> {
   try {
@@ -19,15 +19,15 @@ async function findExistingMr(repoId: number, sourceBranch: string): Promise<str
 }
 
 /**
- * Создаёт MR из sourceBranch в targetBranch. MR не сливается автоматически:
- * создаётся в открытом состоянии и ждёт ручного действия.
+ * Creates an MR from sourceBranch into targetBranch. The MR is not merged
+ * automatically: it is created in an open state and waits for a manual action.
  *
- * @param params.repoId идентификатор проекта в GitLab.
- * @param params.sourceBranch имя исходной ветки (содержит правку).
- * @param params.targetBranch имя целевой ветки.
- * @param params.title заголовок MR.
- * @param params.description описание MR.
- * @returns URL созданного (или уже существующего) MR.
+ * @param params.repoId project identifier in GitLab.
+ * @param params.sourceBranch source branch name (contains the change).
+ * @param params.targetBranch target branch name.
+ * @param params.title MR title.
+ * @param params.description MR description.
+ * @returns URL of the created (or already existing) MR.
  */
 export async function createMr({
   repoId,
@@ -53,7 +53,7 @@ export async function createMr({
         remove_source_branch: true,
       },
     );
-    if (!data.web_url) throw new Error('MR создан, но не вернулся web_url');
+    if (!data.web_url) throw new Error('MR created, but web_url was not returned');
     return data.web_url;
   } catch (e) {
     const existing = await findExistingMr(repoId, sourceBranch);

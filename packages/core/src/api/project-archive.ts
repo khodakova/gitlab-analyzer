@@ -6,19 +6,19 @@ function mb(bytes: number): string {
 }
 
 /**
- * Размер Git-репозитория в байтах (объём git-объектов, вкл. историю).
- * Берётся из `GET /api/v4/projects/:id → statistics.repository_size`.
+ * Size of the Git repository in bytes (git object volume, incl. history).
+ * Taken from `GET /api/v4/projects/:id → statistics.repository_size`.
  *
- * Возвращает `undefined`, если статистику получить нельзя (нет прав, репо
- * удалено, API не отдаёт) или размер неизвестен. Используется только для
- * диагностики упавших по таймауту репо — не является частью отчёта.
+ * Returns `undefined` when the statistics cannot be obtained (no rights, repo
+ * removed, API does not return it) or the size is unknown. Used only for
+ * diagnosing repos that failed by timeout — not part of the report.
  */
 export async function getProjectRepositorySize(projectId: number): Promise<number | undefined> {
   try {
     const resp = await axiosInstance.get<{
       statistics?: { repository_size?: number | null };
     }>(`/api/v4/projects/${projectId}`, {
-      // Без statistics=true GitLab не отдаёт блок statistics (он дорогой).
+      // Without statistics=true GitLab does not return the statistics block (it is expensive).
       params: { statistics: true },
       timeout: 15_000,
     });
@@ -28,11 +28,22 @@ export async function getProjectRepositorySize(projectId: number): Promise<numbe
   }
 }
 
-export async function getProjectArchive(projectId: number, options?: { projectName?: string, branch?: string }) {
+export async function getProjectArchive(
+  projectId: number,
+  options?: {
+    projectName?: string;
+    branch?: string;
+    /** Mutable accumulator, filled with the download duration (ms). */
+    metrics?: { downloadMs: number };
+  },
+) {
   const projectName = options?.projectName ?? String(projectId);
   const branch = options?.branch;
+  // Hoisted BEFORE the try so the catch path can safely write downloadMs (t0
+  // is always defined even if the error is thrown synchronously before any
+  // request starts).
+  const t0 = Date.now();
   try {
-    const startedAt = Date.now();
     let lastLoggedPct = 0;
     const resp = await axiosInstance.get<Blob>(
       `/api/v4/projects/${projectId}/repository/archive.zip`,
@@ -41,29 +52,29 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
         params: {
           sha: branch,
         },
-        // signal: жёстко обрывает запрос ровно через 60с. Голый `timeout`
-        // у axios (Node) НЕ прерывает запрос к серверу, который открыл
-        // соединение, но не отдаёт данные — «aborted» тогда приходит только
-        // через N минут от внешнего таймаута. signal гарантирует таймаут.
+        // signal: hard-aborts the request exactly at 60s. Bare axios (Node)
+        // `timeout` does NOT abort a request to a server that opened a
+        // connection but sends no data — "aborted" then only arrives after N
+        // minutes from the external timeout. signal guarantees the timeout.
         signal: AbortSignal.timeout(60_000),
         onDownloadProgress: (e) => {
           if (!e.total) {
             return;
           }
           const pct = Math.floor((e.loaded / e.total) * 100);
-          // Логируем прогресс только при пересечении очередных 25% — не засираем.
+          // Log progress only when crossing the next 25% — don't spam.
           if (pct >= lastLoggedPct + 25) {
             lastLoggedPct = pct;
             logger.debug(
-              `Загрузка ${projectName}: ${mb(e.loaded)} из ${mb(e.total)} (${pct}%) за ${formatDuration(Date.now() - startedAt)}`,
+              `Downloading ${projectName}: ${mb(e.loaded)} of ${mb(e.total)} (${pct}%) in ${formatDuration(Date.now() - t0)}`,
             );
           }
         },
       },
     );
 
-    // Размер тела: у axios в Node `responseType:'arraybuffer'` даёт Buffer,
-    // а не ArrayBuffer — учитываем оба варианта, иначе лог покажет 0.0 MB.
+    // Body size: with axios in Node `responseType:'arraybuffer'` yields a
+    // Buffer, not an ArrayBuffer — account for both, otherwise the log shows 0.0 MB.
     const raw = resp.data as ArrayBuffer | { length?: number } | null;
     const bytes =
       raw instanceof ArrayBuffer
@@ -71,11 +82,14 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
         : typeof raw === 'object' && raw !== null && typeof (raw as { length?: number }).length === 'number'
           ? (raw as { length: number }).length
           : 0;
-    // Итоговый URL = request.responseURL, после всех редиректов. Если репо
-    // переехало, тут будет видно конечный путь — и будет понятно, что запрос
-    // следовал редиректу.
+    // Final URL = request.responseURL, after all redirects. If the repo moved,
+    // the final path is visible here — and it becomes clear that the request
+    // followed a redirect.
     const finalUrl = (resp.request as { responseURL?: string } | undefined)?.responseURL ?? '-';
-    logger.debug(`Архив ${projectName} скачан: статус=${resp.status}, ${mb(bytes)} за ${formatDuration(Date.now() - startedAt)}, url=${finalUrl}`);
+    logger.debug(`Archive ${projectName} downloaded: status=${resp.status}, ${mb(bytes)} in ${formatDuration(Date.now() - t0)}, url=${finalUrl}`);
+    if (options?.metrics) {
+      options.metrics.downloadMs = Date.now() - t0;
+    }
     return resp.data;
   } catch (err) {
     // Per-project recovery: the archive for a single repo is unreachable
@@ -85,20 +99,25 @@ export async function getProjectArchive(projectId: number, options?: { projectNa
     // `--interactive`. The error message is re-thrown so the caller can
     // surface it (e.g. in report metadata `error` / `branchExists: false`).
     const message = err instanceof Error ? err.message : String(err);
-    // Для axios-ошибок добавим code и итоговый URL — покажет, на какой URL
-    // реально ушёл запрос.
+    // For axios errors add the code and final URL — shows which URL the request
+    // actually went to.
     const cfgUrl = (err as { config?: { url?: string } } | null)?.config?.url;
-    // `AbortSignal.timeout` в axios даёт ERR_CANCELED/'canceled' (то же, что
-    // ручной abort). Отличить таймаут можно только по причине abort:
-    // TimeoutError. Переписываем сообщение в человекочитаемое, чтобы и в
-    // отчёте (error при выключенных логах), и в debug-логе было ясно, что это
-    // таймаут скачивания, а не просто «отменено».
+    // `AbortSignal.timeout` in axios gives ERR_CANCELED/'canceled' (same as a
+    // manual abort). A timeout can only be told apart by the abort reason:
+    // TimeoutError. Rewrite the message into something human-readable so that
+    // both the report (error with logs off) and the debug log make it clear
+    // this is a download timeout, not a plain "canceled".
     const isTimeout =
       (err as { cause?: { name?: string } | DOMException } | null)?.cause?.name === 'TimeoutError';
     const finalMessage = isTimeout
-      ? `превышен таймаут скачивания архива (60с)`
+      ? `archive download timed out (60s)`
       : message;
-    logger.warn(`Не удалось получить архив по проекту ${projectName} ${projectId}: ${finalMessage}${cfgUrl ? ` (url=${cfgUrl})` : ''}`);
+    logger.warn(`Failed to fetch archive for project ${projectName} ${projectId}: ${finalMessage}${cfgUrl ? ` (url=${cfgUrl})` : ''}`);
+    // Fill downloadMs on the failure path too — reflects wall-clock time spent
+    // before the throw (typically the 60s timeout for a stuck download).
+    if (options?.metrics) {
+      options.metrics.downloadMs = Date.now() - t0;
+    }
     throw isTimeout ? new Error(finalMessage) : err;
   }
 }

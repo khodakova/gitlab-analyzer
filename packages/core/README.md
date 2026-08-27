@@ -5,10 +5,10 @@
 
 ## Features
 
-- **`gitlab-analyzer find-strings <strings...>`** — find one or more substrings
+- **`gitlab-analyzer find-matches <strings...>`** — find one or more substrings
   across every project in a GitLab instance, with filters for repo name,
-  branch, path, and `*.test.*` files.
-- **Programmatic API** — `import { findStrings, loadConfig } from 'gitlab-analyzer'`
+  branch, and glob-based file include/exclude.
+- **Programmatic API** — `import { findMatches, loadConfig } from 'gitlab-analyzer'`
   for custom post-processing pipelines.
 - **Config-driven** — JSON / JS / TS config files via
   [cosmiconfig](https://github.com/davidtheclark/cosmiconfig), validated against
@@ -38,7 +38,7 @@ After a global install, the `gitlab-analyzer` binary is on your `PATH`.
 
 ## Quick Start
 
-The minimum to run `find-strings` is a working `.env` with your GitLab URL
+The minimum to run `find-matches` is a working `.env` with your GitLab URL
 and a private token — **no config file is required**. The CLI checks CLI
 flags, then environment variables, then `gitlab-analyzer.json`, then
 built-in defaults. If anything required is still missing after all that,
@@ -56,12 +56,12 @@ the CLI prints one consolidated error listing every missing field.
 2. **Run a search**:
 
    ```bash
-   gitlab-analyzer find-strings 'console.log' 'debugger' \
+   gitlab-analyzer find-matches 'console.log' 'debugger' \
      --branch develop \
      --output ./results.json
    ```
 
-   Progress (`Обработано 3 из 12 · my-frontend-app`) goes to **stderr**; the JSON array of
+   Progress (`Processed 3 of 12 · my-frontend-app`) goes to **stderr**; the JSON array of
    matches goes to `./results.json`.
 
 > A `gitlab-analyzer.json` config file is **optional**. Use it when you want
@@ -83,8 +83,8 @@ Each option is resolved in this order (highest wins):
 ```
 1. CLI flag                        e.g. --branch main
 2. Environment variable            GITLAB_URL, PRIVATE_TOKEN (typically from .env)
-3. gitlab-analyzer.json config     defaults.*, commands.find-strings.*, gitlab.url
-4. Built-in default                branch="develop", pathFilter="/src/", concurrency=5, ...
+3. gitlab-analyzer.json config     defaults.*, commands.find-matches.*, gitlab.url
+4. Built-in default                branch="develop", concurrency=5, fileInclude=[], fileExclude=[], ...
 ```
 
 If, after all four sources are consulted, a **required** option is still
@@ -156,14 +156,14 @@ A more complete example showing every supported field:
     "branch": "develop",
     "repoNameFilter": "frontend",
     "excludeRepos": ["archived-repo", "wip-repo"],
-    "pathFilter": "/src/",
-    "includeTests": false,
+    "fileInclude": [],
+    "fileExclude": [],
     "enableLogs": true
   },
   "commands": {
-    "find-strings": {
+    "find-matches": {
       "concurrency": 5,
-      "output": "./find-strings-result.json"
+      "output": "./find-matches-result.json"
     }
   }
 }
@@ -177,22 +177,22 @@ A more complete example showing every supported field:
 | `defaults.branch` | string | `"develop"` | Branch to scan |
 | `defaults.repoNameFilter` | string | — | Substring filter for repo names |
 | `defaults.excludeRepos` | string[] | `[]` | Repo names to skip |
-| `defaults.pathFilter` | string | `"/src/"` (built-in) | Substring filter for file paths |
-| `defaults.includeTests` | boolean | `false` | Include `*.test.*` files |
+| `defaults.fileInclude` | string[] | `[]` | Glob patterns; only matching files are scanned |
+| `defaults.fileExclude` | string[] | `[]` | Glob patterns; matching files are always skipped (wins over `fileInclude`) |
 | `defaults.enableLogs` | boolean | `false` | Enable debug/API logging (see [Logging](#logging)) |
-| `commands.find-strings.concurrency` | int (positive) | `5` | Parallel requests to GitLab |
-| `commands.find-strings.output` | string | — | Path to write JSON results |
+| `commands.find-matches.concurrency` | int (positive) | `5` | Parallel requests to GitLab |
+| `commands.find-matches.output` | string | — | Path to write JSON results |
 
 ## CLI Usage
 
-The package ships one command today: `find-strings`. Run
-`gitlab-analyzer --help` to list commands and `gitlab-analyzer find-strings
+The package ships one command today: `find-matches`. Run
+`gitlab-analyzer --help` to list commands and `gitlab-analyzer find-matches
 --help` for the full option reference.
 
-### `find-strings` — option reference
+### `find-matches` — option reference
 
 ```
-gitlab-analyzer find-strings [options] <strings...>
+gitlab-analyzer find-matches [options] <strings...>
 
 Search for specific strings across all GitLab projects reachable from the
 configured instance
@@ -205,8 +205,10 @@ Options:
   -r, --repo-filter <str>  Substring filter for project names (passed to GitLab search=)
   -e, --exclude <list>     Comma-separated list of repo names to skip
   -b, --branch <name>      Branch to scan in every project
-  -p, --path-filter <str>  Substring filter for file paths inside the archive
-      --include-tests      Include *.test.* files in the search
+    --file-include <list> Comma-separated glob patterns; only files matching at
+                           least one pattern are scanned (default: all)
+    --file-exclude <list> Comma-separated glob patterns; matching files are
+                           always skipped (wins over --file-include)
       --format <txt|json>  Report format (default: json; drives the extension of
                            the auto-generated file name)
       --stdout             Also write the report to stdout (in addition to the file)
@@ -223,12 +225,12 @@ Options:
 
 ### Interactive repo selection
 
-By default `find-strings` searches every reachable project (after
+By default `find-matches` searches every reachable project (after
 `excludeRepos`/`--exclude`). Pass `--interactive` to pick the repos yourself
 before the search runs:
 
 ```bash
-gitlab-analyzer find-strings 'TODO' --interactive
+gitlab-analyzer find-matches 'TODO' --interactive
 ```
 
 An `enquirer` multi-select list shows every repo initially selected. Use
@@ -241,11 +243,11 @@ to stderr before searching so you can see where the search will run.
 ### Logging
 
 By default the tool is quiet (`--enable-logs` is **off**): progress
-(`Обработано 3 из 12 · repo`), the summary line, and the pre-search repo list are always
+(`Processed 3 of 12 · repo`), the summary line, and the pre-search repo list are always
 printed to **stderr**, but debug/API output is suppressed.
 
 Pass `--enable-logs` to turn on the full debug log: API request URLs,
-"Найдено репозиториев: N", per-project recovery messages (e.g. an archive
+"Repositories found: N", per-project recovery messages (e.g. an archive
 that could not be fetched — the repo is skipped and the scan continues), and
 other informational steps. `--interactive` also enables the full log
 automatically (interactive mode needs it), so you don't have to pass
@@ -265,10 +267,10 @@ The flag resolves through the standard precedence chain
 
 ```bash
 # Debug logging on for one run:
-gitlab-analyzer find-strings 'TODO' --enable-logs
+gitlab-analyzer find-matches 'TODO' --enable-logs
 
 # Equivalent via env var:
-ENABLE_LOGS=true gitlab-analyzer find-strings 'TODO'
+ENABLE_LOGS=true gitlab-analyzer find-matches 'TODO'
 ```
 
 All log output goes to **stderr**, so the JSON result on stdout stays clean
@@ -278,11 +280,11 @@ and pipeable.
 
 ```bash
 PRIVATE_TOKEN=<your-private-token> \
-  gitlab-analyzer find-strings 'console.log' 'debugger' \
+  gitlab-analyzer find-matches 'console.log' 'debugger' \
     --repo-filter 'frontend' \
     --exclude 'archived-repo,wip-repo' \
     --branch develop \
-    --output ./results/find-strings.json
+    --output ./results/find-matches.json
 ```
 
 ### Multi-line invocations (PowerShell)
@@ -294,18 +296,18 @@ filename uses `$(Get-Date -Format ...)` so each run lands in its own
 file and nothing gets overwritten:
 
 ```powershell
-node dist/cli.js find-strings 'string1', 'string2' `
+node dist/cli.js find-matches 'string1', 'string2' `
   --repo-filter 'my-repo' `
-  --include-tests `
+  --file-include '**/*.ts,**/*.tsx' `
   -o "./results/run-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
 ```
 
 ### Output routing
 
-- **`--output <path>`** (or `commands.find-strings.output` in the config)
+- **`--output <path>`** (or `commands.find-matches.output` in the config)
   writes the report to the given file.
 - **No `--output` flag and no config default** — an auto-named file is
-  created in the current directory: `find-strings-results-<DATE>.<ext>`,
+  created in the current directory: `find-matches-results-<DATE>.<ext>`,
   where `<ext>` is `.json` (default) or `.txt` (with `--format txt`). If a
   file with that name already exists, a numeric version is appended before
   the extension (`-1`, `-2`, …) until a free name is found.
@@ -315,12 +317,12 @@ node dist/cli.js find-strings 'string1', 'string2' `
   If `--format` conflicts with the extension of an explicit `--output` path
   (e.g. `--format txt -o result.json`), the command fails with an error and
   nothing is written.
-- **Progress** (e.g. `Обработано 3 из 12 · my-frontend-app`) and **error / summary lines**
+- **Progress** (e.g. `Processed 3 of 12 · my-frontend-app`) and **error / summary lines**
   always go to **stderr**, so the report on stdout stays clean for piping:
 
   ```bash
-  gitlab-analyzer find-strings 'TODO' --stdout | jq '.metadata.branch'
-  gitlab-analyzer find-strings 'TODO' --stdout | jq '.repositories[].projectName'
+  gitlab-analyzer find-matches 'TODO' --stdout | jq '.metadata.branch'
+  gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
   ```
 
 ### Exit codes
@@ -339,10 +341,10 @@ For custom post-processing, import the library functions directly:
 
 ```ts
 import {
-  findStrings,
+  findMatches,
   loadConfig,
   configureLogger,
-  type FindStringsOptions,
+  type FindMatchesOptions,
   type MatchResult,
 } from 'gitlab-analyzer';
 
@@ -351,7 +353,7 @@ const config = await loadConfig();
 // Optional: turn on debug/API logging for library calls.
 configureLogger({ enabled: true });
 
-const results: MatchResult[] = await findStrings({
+const results: MatchResult[] = await findMatches({
   searchStrings: ['console.log', 'debugger'],
   branch: config.defaults.branch,
   repoNameFilter: 'frontend',
@@ -360,8 +362,8 @@ const results: MatchResult[] = await findStrings({
     { id: 42, name: 'frontend-app' },
     { id: 7, name: 'backend-api' },
   ],
-  pathFilter: '/src/',
-  includeTests: false,
+  fileInclude: [],
+  fileExclude: [],
   concurrency: 5,
   onProgress: (done, total, currentRepo) => {
     process.stderr.write(`[${done}/${total}] ${currentRepo}\n`);
@@ -380,7 +382,7 @@ const summary = results
 await fs.writeFile('my-custom-report.json', JSON.stringify(summary, null, 2));
 ```
 
-`findStrings` never writes files and never calls `process.exit` — it is an
+`findMatches` never writes files and never calls `process.exit` — it is an
 async function returning the result array. It does, however, write diagnostic
 lines to **stderr** through the shared central logger: `debug` lines are
 gated by `configureLogger({ enabled })` (off by default), while
@@ -401,17 +403,44 @@ concurrency. Call `flushLogs()` before `process.exit` to drain the queue.
 Enable it when you want the internal API/utils output for your own
 programmatic runs.
 
-`findStrings` accepts an optional `projects` array of already-fetched
+`findMatches` accepts an optional `projects` array of already-fetched
 `SearchProjectsItem` objects. When provided, it skips the project-list fetch
 (so `getAllProjects` is not called again) and just runs the search over that
 list — useful when a caller has already loaded the repos (e.g. a CLI that built
 the picker). `excludeRepos` / `selectedRepos` are still applied on top.
 
+### Performance metrics (`onRepoTiming`)
+
+For diagnosing where time goes, `findMatches` accepts an optional
+`onRepoTiming(timing)` callback that fires once per processed repository (both
+success **and** failure) with per-repo performance data — download/unzip/scan
+durations, `totalMs`, and aggregated per-file counters (`filesScanned`,
+`filesMatched`, `textLength`), plus `error` for a repo whose archive could not
+be fetched:
+
+```ts
+await findMatches({
+  searchStrings: ['console.log'],
+  branch: 'develop',
+  onRepoTiming: (t) => {
+    // t = { projectId, projectName, downloadMs, unzipMs, scanMs, totalMs,
+    //       filesScanned, filesMatched, textLength, error? }
+  },
+});
+```
+
+This is a separate channel from the returned `MatchResult[]` — the result and
+report shapes are unchanged. Heap usage is sampled per run (not per repo); the
+CLI surfaces it via `--metrics-file`. The first-class API to get metrics is
+`onRepoTiming`; `findMatches` also accepts an optional internal `metrics`
+accumulator (typed as `SearchMetrics`, from `@gitlab-analyzer/core/internal`)
+that collects the same data plus list metrics in one place for CLI-style tools.
+
 ## Output Schema
 
-### Library API (`findStrings`)
+### Library API (`findMatches`)
 
-`findStrings` still returns an array of `MatchResult`, one entry per project
+`findMatches` still returns an array of `MatchResult`, one entry per project
 whose archive was fetched successfully. Projects whose archive fetch fails are
 omitted (their error is reported through the 4th `onProgress` argument —
 `(done, total, currentRepo, error?)`). The library return shape is unchanged.
@@ -445,8 +474,8 @@ is missing, `branchExists: false`).
     "branch": "develop",
     "searchStrings": ["console.log", "debugger"],
     "repoNameFilter": null,
-    "pathFilter": "/src/",
-    "includeTests": false,
+    "fileInclude": [],
+    "fileExclude": [],
     "excludeRepos": ["archived-repo"]
   },
   "repositories": [
@@ -480,7 +509,7 @@ first, then per-repo file blocks with full `content`).
 
 ## Troubleshooting
 
-### "Cannot run find-strings — missing required options:"
+### "Cannot run find-matches — missing required options:"
 
 The CLI checked every source (CLI flags, env vars, config file, built-in
 defaults) and still couldn't satisfy one or more required fields. The error
@@ -488,7 +517,7 @@ message itself tells you exactly which fields are missing and how to fix
 each one. Example:
 
 ```
-Error: Cannot run find-strings — missing required options:
+Error: Cannot run find-matches — missing required options:
   - gitlabUrl: Set GITLAB_URL in the environment (or .env), or add "gitlab.url" to gitlab-analyzer.json.
   - PRIVATE_TOKEN: Set PRIVATE_TOKEN in the environment (or .env). Tokens are never read from config files.
 ```
@@ -522,7 +551,7 @@ GitLab imposes per-user request limits. Lower `--concurrency` to slow the
 fan-out:
 
 ```bash
-gitlab-analyzer find-strings 'TODO' --concurrency 2
+gitlab-analyzer find-matches 'TODO' --concurrency 2
 ```
 
 A good rule of thumb is half of your instance's documented requests-per-second
@@ -537,15 +566,33 @@ remove the field from the config file.
 
 ### No matches but the file definitely contains the string
 
-The default `pathFilter` is `'/src/'`, so files outside any `src` directory
-are skipped. Pass `--path-filter '/'` to scan every file in every archive:
+By default every file in every archive is scanned. If you've set a narrowing
+`fileInclude` (e.g. `'**/src/**'`) in your config, files outside that pattern
+won't be scanned — drop the `fileInclude` line or override it with
+`--file-include '**/*'` for that run:
 
 ```bash
-gitlab-analyzer find-strings 'needle' --path-filter '/'
+gitlab-analyzer find-matches 'needle' --file-include '**/*'
 ```
 
-`*.test.*` files are excluded by default — pass `--include-tests` to include
-them.
+Test files are scanned by default — exclude them with
+`--file-exclude '**/*.test.ts'`.
+
+### Common glob patterns
+
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`).
+
+A pattern **with a slash** matches the full path — so it must account for that
+leading slash (use `**/` to traverse directories). A pattern **without a slash**
+matches by **file name (basename)** in any directory.
+
+| Need | Pattern |
+|---|---|
+| Find test files | `**/*.test.*` |
+| Find a file by its exact name (anywhere) | `foo.ts` or `**/foo.ts` |
+| Find any `.ts` file | `*.ts` or `**/*.ts` |
+| Find files only under `src/` | `**/src/**/*.ts` |
+| Skip node_modules | `**/node_modules/**` |
 
 ## Security: tokens
 
@@ -562,21 +609,21 @@ config files are an automatic config-load failure — by design.
 
 Alpha. CLI + library surface complete, build emits dual ESM + CJS via **tsup**,
 release infrastructure in place via [Changesets](https://github.com/changesets/changesets).
-The single `find-strings` command is feature-complete against the MVP plan;
+The single `find-matches` command is feature-complete against the MVP plan;
 remaining work is end-to-end verification against a live GitLab instance.
 
 Both module formats are published from a single source tree:
 
 ```js
 // ESM
-import { findStrings, loadConfig } from 'gitlab-analyzer'
+import { findMatches, loadConfig } from 'gitlab-analyzer'
 
 // CJS
-const { findStrings, loadConfig } = require('gitlab-analyzer')
+const { findMatches, loadConfig } = require('gitlab-analyzer')
 ```
 
-Both resolve to the same public API (`findStrings`, `loadConfig`, types
-`FindStringsOptions` / `MatchResult`). The CJS variant is emitted as
+Both resolve to the same public API (`findMatches`, `loadConfig`, types
+`FindMatchesOptions` / `MatchResult`). The CJS variant is emitted as
 `dist/index.cjs` and the ESM variant as `dist/index.js`; types resolve via
 the `exports["."].types` field to `dist/index.d.ts`.
 

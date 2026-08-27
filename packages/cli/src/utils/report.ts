@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { extname } from 'node:path';
 import type { MatchResult } from '@gitlab-analyzer/core';
-import type { ResolvedFindStringsOptions } from './options.ts';
+import type { ResolvedFindMatchesOptions } from './options.ts';
 
 /**
  * Normalized report format, either the JSON object shape (default) or the
@@ -36,8 +36,10 @@ export type Report = {
     branch: string;
     searchStrings: string[];
     repoNameFilter: string | null;
-    pathFilter: string;
-    includeTests: boolean;
+    /** Glob patterns for file paths to SCAN (always an array; empty = scan all). */
+    fileInclude: string[];
+    /** Glob patterns for file paths to SKIP (always an array; empty = no exclude). */
+    fileExclude: string[];
     excludeRepos: string[];
   };
   repositories: ReportRepository[];
@@ -65,7 +67,7 @@ function hasExtension(path: string, ext: string): boolean {
  *
  * - If `--output` is provided, it is used verbatim (after a format/vs-extension
  *   conflict check) and overrides any auto-generated name.
- * - Otherwise an auto name `find-strings-results-<DATE>.<ext>` is generated in
+ * - Otherwise an auto name `find-matches-results-<DATE>.<ext>` is generated in
  *   the current directory; if a file with that name already exists a numeric
  *   suffix is appended before the extension (`-1`, `-2`, …) until a free name
  *   is found.
@@ -84,12 +86,12 @@ export function resolveOutputPath(
     return output;
   }
   const ext = format === 'txt' ? '.txt' : '.json';
-  const base = `find-strings-results-${date}${ext}`;
+  const base = `find-matches-results-${date}${ext}`;
   if (!existsSync(base)) {
     return base;
   }
   // Version existing auto-named files: -1, -2, ... up to a free name.
-  const stem = `find-strings-results-${date}`;
+  const stem = `find-matches-results-${date}`;
   let version = 1;
   let candidate = `${stem}-${version}${ext}`;
   while (existsSync(candidate)) {
@@ -129,8 +131,13 @@ export function assertFormatPathConsistency(
 /**
  * Render the report as human-readable text. Mirrors the JSON structure
  * (metadata first, then per-repo results with full file content).
+ *
+ * `filesScanned` is an optional stdout-only summary (E.14): the total number
+ * of files that passed both filters across all repos. It is NOT part of the
+ * Report metadata — the JSON file shape is unchanged. When omitted (e.g.
+ * from a unit test without metrics), we print `0`.
  */
-export function renderReportTxt(report: Report): string {
+export function renderReportTxt(report: Report, filesScanned?: number): string {
   const lines: string[] = [];
   const { metadata, repositories } = report;
 
@@ -140,14 +147,21 @@ export function renderReportTxt(report: Report): string {
   lines.push(`Branch: ${metadata.branch}`);
   lines.push(`Search strings: ${metadata.searchStrings.join(', ') || '(none)'}`);
   lines.push(`Repo name filter: ${metadata.repoNameFilter ?? '(none)'}`);
-  lines.push(`Path filter: ${metadata.pathFilter}`);
-  lines.push(`Include tests: ${metadata.includeTests ? 'yes' : 'no'}`);
+  lines.push(
+    `File include: ${metadata.fileInclude.length > 0 ? metadata.fileInclude.join(', ') : '(none)'}`,
+  );
+  lines.push(
+    `File exclude: ${metadata.fileExclude.length > 0 ? metadata.fileExclude.join(', ') : '(none)'}`,
+  );
   lines.push(
     `Excluded repos: ${metadata.excludeRepos.length > 0 ? metadata.excludeRepos.join(', ') : '(none)'}`,
   );
   lines.push(
     `Repositories scanned: ${repositories.length}`,
   );
+  // E.14 — stdout-only summary of files that passed both filters. NOT part
+  // of the Report metadata / JSON file shape.
+  lines.push(`files analyzed: ${filesScanned ?? 0}`);
   lines.push('');
 
   for (const repo of repositories) {
@@ -191,8 +205,8 @@ export function renderReportTxt(report: Report): string {
  */
 export function buildReport(
   resolvedOptions: Pick<
-    ResolvedFindStringsOptions,
-    'branch' | 'repoNameFilter' | 'pathFilter' | 'includeTests' | 'excludeRepos' | 'format' | 'stdout'
+    ResolvedFindMatchesOptions,
+    'branch' | 'repoNameFilter' | 'fileInclude' | 'fileExclude' | 'excludeRepos' | 'format' | 'stdout'
   >,
   strings: string[],
   scannedRepos: ReportRepository[],
@@ -204,8 +218,8 @@ export function buildReport(
       branch: resolvedOptions.branch,
       searchStrings: strings,
       repoNameFilter: resolvedOptions.repoNameFilter ?? null,
-      pathFilter: resolvedOptions.pathFilter,
-      includeTests: resolvedOptions.includeTests,
+      fileInclude: resolvedOptions.fileInclude,
+      fileExclude: resolvedOptions.fileExclude,
       excludeRepos: resolvedOptions.excludeRepos,
     },
     repositories: scannedRepos,

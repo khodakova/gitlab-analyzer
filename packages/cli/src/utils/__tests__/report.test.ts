@@ -29,21 +29,21 @@ describe('report > resolveOutputPath', () => {
   it('generates an auto json name when no --output is given', () => {
     mocks.existsSync.mockReturnValue(false);
     expect(resolveOutputPath(undefined, 'json', '2026-08-13-1536')).toBe(
-      'find-strings-results-2026-08-13-1536.json',
+      'find-matches-results-2026-08-13-1536.json',
     );
   });
 
   it('generates an auto txt name for --format txt', () => {
     mocks.existsSync.mockReturnValue(false);
     expect(resolveOutputPath(undefined, 'txt', '2026-08-13-1536')).toBe(
-      'find-strings-results-2026-08-13-1536.txt',
+      'find-matches-results-2026-08-13-1536.txt',
     );
   });
 
   it('versions the auto name with -1, -2 when the base name exists', () => {
-    const base = 'find-strings-results-2026-08-13-1536.json';
-    const v1 = 'find-strings-results-2026-08-13-1536-1.json';
-    const v2 = 'find-strings-results-2026-08-13-1536-2.json';
+    const base = 'find-matches-results-2026-08-13-1536.json';
+    const v1 = 'find-matches-results-2026-08-13-1536-1.json';
+    const v2 = 'find-matches-results-2026-08-13-1536-2.json';
     mocks.existsSync
       .mockImplementation((p: string) => p === base || p === v1);
     expect(resolveOutputPath(undefined, 'json', '2026-08-13-1536')).toBe(v2);
@@ -89,8 +89,8 @@ describe('report > renderReportTxt', () => {
       branch: 'develop',
       searchStrings: ['needle'],
       repoNameFilter: null,
-      pathFilter: '/src/',
-      includeTests: false,
+      fileInclude: ['**/*.ts'],
+      fileExclude: ['**/*.test.ts'],
       excludeRepos: ['skip-me'],
     },
     repositories: [
@@ -117,9 +117,38 @@ describe('report > renderReportTxt', () => {
     const txt = renderReportTxt(report);
     expect(txt).toContain('Generated at: 2026-08-13T00:00:00.000Z');
     expect(txt).toContain('Branch: develop');
+    expect(txt).toContain('File include: **/*.ts');
+    expect(txt).toContain('File exclude: **/*.test.ts');
     expect(txt).toContain('Excluded repos: skip-me');
     expect(txt).toContain('---- alpha (id: 1) ----');
     expect(txt).toContain('> /src/a.ts');
     expect(txt).toContain('matched: needle');
+  });
+
+  it('shows (none) for empty fileInclude / fileExclude arrays', () => {
+    const emptyReport: Report = {
+      ...report,
+      metadata: {
+        ...report.metadata,
+        fileInclude: [],
+        fileExclude: [],
+      },
+    };
+    const txt = renderReportTxt(emptyReport);
+    expect(txt).toContain('File include: (none)');
+    expect(txt).toContain('File exclude: (none)');
+  });
+
+  it('includes `files analyzed: N` line in stdout only', () => {
+    const txt = renderReportTxt(report, 42);
+    expect(txt).toContain('files analyzed: 42');
+
+    // And the string is NOT in the JSON serialization (stdout-only field).
+    expect(JSON.stringify(report)).not.toContain('files analyzed');
+  });
+
+  it('falls back to 0 when filesScanned is not passed', () => {
+    const txt = renderReportTxt(report);
+    expect(txt).toContain('files analyzed: 0');
   });
 });

@@ -5,7 +5,7 @@ import { defineConfig } from 'tsup'
  *
  * Two entries, dual ESM + CJS output:
  *
- * - `index`    — public library API (`findStrings`, `loadConfig`,
+ * - `index`    — public library API (`findMatches`, `loadConfig`,
  *   `configureLogger`, types). Emits `dist/index.js` (ESM),
  *   `dist/index.cjs` (CJS), `dist/index.d.ts` (types). Tree-shakes unused
  *   source modules into the bundle so the consumer install surface is just

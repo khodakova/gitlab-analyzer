@@ -1,15 +1,15 @@
 /**
  * Public API for the `gitlab-analyzer` library.
  *
- * Consumers can either use the CLI (`gitlab-analyzer find-strings ...`) or
+ * Consumers can either use the CLI (`gitlab-analyzer find-matches ...`) or
  * import these symbols directly:
  *
  * ```ts
  * import {
- *   findStrings,
+ *   findMatches,
  *   loadConfig,
  *   configureLogger,
- *   type FindStringsOptions,
+ *   type FindMatchesOptions,
  *   type MatchResult,
  * } from 'gitlab-analyzer';
  *
@@ -18,7 +18,7 @@
  * // Optional: turn on debug/API logging for library calls.
  * configureLogger({ enabled: true });
  *
- * const results = await findStrings({
+ * const results = await findMatches({
  *   searchStrings: ['my-secret'],
  *   branch: config.defaults.branch,
  *   onProgress: (done, total, repo) =>
@@ -32,7 +32,7 @@
  * module — consumers go through {@link loadConfig} which returns a fully
  * validated {@link import('./config/load.ts').LoadedConfig}. The shape of
  * each {@link MatchResult} is documented on the type itself (see
- * `src/commands/find-strings.ts`).
+ * `src/commands/find-matches.ts`).
  */
 
 // Runtime sentinel — gives v8 coverage a statement to mark as executed
@@ -41,11 +41,12 @@
 export const __reExportSentinel = true;
 void __reExportSentinel;
 
-export { findStrings } from './commands/find-strings.ts';
+export { findMatches } from './commands/find-matches.ts';
 export type {
-  FindStringsOptions,
+  FindMatchesOptions,
   MatchResult,
-} from './commands/find-strings.ts';
+  FileFilters,
+} from './commands/find-matches.types.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
 export { configureLogger, logger, flushLogs, formatDuration } from './utils/logger.ts';
