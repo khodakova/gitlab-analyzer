@@ -11,18 +11,22 @@ const GitlabSchema = z.object({
   url: z.string().url().optional(),
 }).strict();
 
+const OutputFilterSchema = z.enum(['found', 'not-found', 'all']);
+
 const DefaultsSchema = z.object({
   branch: z.string().default('develop'),
   repoNameFilter: z.string().optional(),
   excludeRepos: z.array(z.string()).default([]),
   fileInclude: z.array(z.string()).default([]),
   fileExclude: z.array(z.string()).default([]),
+  outputFilter: OutputFilterSchema.default('all'),
   enableLogs: z.boolean().default(false),
 });
 
 const FindMatchesCommandSchema = z.object({
   concurrency: z.number().int().positive().default(5),
   output: z.string().optional(),
+  outputFilter: OutputFilterSchema.optional(),
 });
 
 export const GitlabAnalyzerConfigSchema = z.object({
@@ -36,6 +40,7 @@ export const GitlabAnalyzerConfigSchema = z.object({
     excludeRepos: [] as string[],
     fileInclude: [] as string[],
     fileExclude: [] as string[],
+    outputFilter: 'all' as const,
     enableLogs: false,
   })),
   commands: z.object({

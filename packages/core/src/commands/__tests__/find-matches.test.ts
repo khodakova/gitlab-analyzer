@@ -32,7 +32,8 @@ import { configureLogger, logger, flushLogs } from '../../utils/logger.ts';
 /**
  * Build a real in-memory ZIP archive (NOT a JSZip mock). Paths MUST use
  * leading slashes (`/src/foo.ts`) to match real GitLab archive structure
- * — picomatch patterns need a leading double-star to traverse dirs.
+ * — patterns with a slash match the full path (leading double-star needed
+ * to traverse dirs); patterns without a slash match by basename.
  */
 async function makeZip(files: Record<string, string>): Promise<ArrayBuffer> {
   const zip = new JSZip();
@@ -182,7 +183,50 @@ describe('findMatches', () => {
       ]);
     });
 
-    it('picomatch semantics: **/*.ts matches /src/foo.ts; *.ts and src/**/*.ts do NOT', async () => {
+    it('fileInclude pattern without a slash matches by basename in any directory', async () => {
+      const archive = await makeZip({
+        '/infrastructure/helm/configs/values.yaml.gotmpl': 'TARGET',
+        '/src/other.yaml': 'TARGET',
+        '/src/values.yaml.gotmpl': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['values.yaml.gotmpl'],
+      });
+
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/infrastructure/helm/configs/values.yaml.gotmpl',
+        '/src/values.yaml.gotmpl',
+      ]);
+    });
+
+    it('fileInclude pattern WITH a slash still matches the full path', async () => {
+      const archive = await makeZip({
+        '/infrastructure/helm/configs/values.yaml.gotmpl': 'TARGET',
+        '/src/values.yaml.gotmpl': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileInclude: ['**/values.yaml.gotmpl'],
+      });
+
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual([
+        '/infrastructure/helm/configs/values.yaml.gotmpl',
+        '/src/values.yaml.gotmpl',
+      ]);
+    });
+
+    it('picomatch semantics: **/*.ts matches /src/foo.ts; src/**/*.ts does NOT; *.ts matches by basename', async () => {
       const archive = await makeZip({
         '/src/a.ts': 'X',
         '/lib/b.ts': 'X',
@@ -191,16 +235,17 @@ describe('findMatches', () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
 
-      // *.ts does NOT match /src/foo.ts — path keeps its leading /
+      // *.ts has no slash → matches by basename, so it finds both files
       const r1 = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
         fileInclude: ['*.ts'],
       });
-      expect(r1[0].results).toEqual([]);
+      expect(r1[0].results.map((m) => m.filename).sort()).toEqual(['/lib/b.ts', '/src/a.ts']);
 
-      // src/**/*.ts does NOT match /src/foo.ts — pattern requires start with
-      // "src" segment, but the path starts with "/"
+      // src/**/*.ts contains a slash → full-path matching; does NOT match
+      // /src/foo.ts — pattern requires start with "src" segment, but the path
+      // starts with "/"
       const r2 = await findMatches({
         searchStrings: ['X'],
         branch: 'main',
@@ -256,6 +301,24 @@ describe('findMatches', () => {
       });
 
       expect(results[0].results.map((m) => m.filename)).toEqual(['/src/foo.ts']);
+    });
+
+    it('fileExclude pattern without a slash skips by basename in any directory', async () => {
+      const archive = await makeZip({
+        '/infrastructure/helm/configs/values.yaml.gotmpl': 'TARGET',
+        '/src/keep.yaml': 'TARGET',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['TARGET'],
+        branch: 'main',
+        fileExclude: ['values.yaml.gotmpl'],
+      });
+
+      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/keep.yaml']);
     });
 
     it('exclude wins over include (gitignore-style)', async () => {
@@ -813,7 +876,7 @@ describe('findMatches', () => {
     });
   });
 
-  describe('case 12: log levels (success "Готово" / warn "Архив не получен" / debug gate)', () => {
+  describe('case 12: log levels (success "Done" / warn "Archive not received" / debug gate)', () => {
     let stderrSpy: ReturnType<typeof vi.spyOn>;
     const collect = () =>
       stderrSpy.mock.calls.map((c: readonly unknown[]) => String(c[0])).join('');
@@ -827,7 +890,7 @@ describe('findMatches', () => {
       configureLogger({ enabled: false });
     });
 
-    it('logs ✓ Готово (success) for a scanned repo, even when debug is disabled', async () => {
+    it('logs ✓ Done (success) for a scanned repo, even when debug is disabled', async () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-ok' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
@@ -835,20 +898,20 @@ describe('findMatches', () => {
       await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
 
-      expect(collect()).toContain('✓ Готово: repo-ok (1 файл(ов) с совпадениями)');
+      expect(collect()).toContain('✓ Done: repo-ok (1 file(s) with matches)');
     });
 
-    it('logs ⚠ Архив не получен (warn) when the archive fetch rejects, even when debug is disabled', async () => {
+    it('logs ⚠ Archive not received (warn) when the archive fetch rejects, even when debug is disabled', async () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-bad' })]);
       getProjectArchiveMock.mockRejectedValue(new Error('Request failed with status code 404'));
 
       await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
 
-      expect(collect()).toContain('⚠ Архив не получен: repo-bad (');
+      expect(collect()).toContain('⚠ Archive not received: repo-bad (');
     });
 
-    it('gates debug lines ([debug] «Скачивание архива…») behind enabled', async () => {
+    it('gates debug lines ([debug] "Downloading archive...") behind enabled', async () => {
       const archive = await makeZip({ '/src/x.ts': 'X' });
       getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'repo-dbg' })]);
       getProjectArchiveMock.mockResolvedValue(archive);
@@ -858,12 +921,12 @@ describe('findMatches', () => {
       await flushLogs();
       expect(collect()).not.toContain('[debug]');
 
-      // enabled: [debug] «Скачивание архива…» appears
+      // enabled: [debug] "Downloading archive..." appears
       stderrSpy.mockClear();
       configureLogger({ enabled: true });
       await findMatches({ searchStrings: ['X'], branch: 'main' });
       await flushLogs();
-      expect(collect()).toContain('[debug] Скачивание архива: repo-dbg (id=1, branch=main)…');
+      expect(collect()).toContain('[debug] Downloading archive: repo-dbg (id=1, branch=main)...');
     });
   });
 
@@ -979,9 +1042,9 @@ describe('findMatches', () => {
 
     it('emits a timing with error for a failed repo, downloadMs >= 0, phases zero', async () => {
       getAllProjectsMock.mockResolvedValue([project({ id: 5, name: 'broken' })]);
-      getProjectArchiveMock.mockRejectedValue(new Error('превышен таймаут'));
+      getProjectArchiveMock.mockRejectedValue(new Error('timeout exceeded'));
 
-      let timing: import('../find-matches.ts').RepoTiming | undefined;
+      let timing: import('../find-matches.types.ts').RepoTiming | undefined;
       await findMatches({
         searchStrings: ['X'],
         branch: 'main',
@@ -989,7 +1052,7 @@ describe('findMatches', () => {
       });
 
       expect(timing).toBeDefined();
-      expect(timing!.error).toContain('превышен таймаут');
+      expect(timing!.error).toContain('timeout exceeded');
       expect(timing!.downloadMs).toBeGreaterThanOrEqual(0);
       expect(timing!.unzipMs).toBe(0);
       expect(timing!.scanMs).toBe(0);

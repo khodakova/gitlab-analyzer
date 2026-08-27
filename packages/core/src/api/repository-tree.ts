@@ -2,7 +2,7 @@ import { axiosInstance } from './config.ts';
 import { logger } from '../utils/logger.ts';
 
 /**
- * Получить файлы внутри директории или контент в файле
+ * Get files inside a directory or the content of a file
  * @param projectId
  * @param filePath
  */
@@ -14,8 +14,8 @@ export function getGitTree(projectId: number, filePath?: string) {
       return resp.data
     })
     .catch((err) => {
-      // console.error(`Не удалось получить файлы по проекту ${projectId}`);
-      // console.error(`Не удалось получить файлы по проекту ${projectId}`,err);
+      // console.error(`Failed to get files for project ${projectId}`);
+      // console.error(`Failed to get files for project ${projectId}`,err);
       return null;
     })
 }

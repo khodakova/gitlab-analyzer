@@ -61,7 +61,7 @@ the CLI prints one consolidated error listing every missing field.
      --output ./results.json
    ```
 
-   Progress (`Обработано 3 из 12 · my-frontend-app`) goes to **stderr**; the JSON array of
+   Progress (`Processed 3 of 12 · my-frontend-app`) goes to **stderr**; the JSON array of
    matches goes to `./results.json`.
 
 > A `gitlab-analyzer.json` config file is **optional**. Use it when you want
@@ -243,11 +243,11 @@ to stderr before searching so you can see where the search will run.
 ### Logging
 
 By default the tool is quiet (`--enable-logs` is **off**): progress
-(`Обработано 3 из 12 · repo`), the summary line, and the pre-search repo list are always
+(`Processed 3 of 12 · repo`), the summary line, and the pre-search repo list are always
 printed to **stderr**, but debug/API output is suppressed.
 
 Pass `--enable-logs` to turn on the full debug log: API request URLs,
-"Найдено репозиториев: N", per-project recovery messages (e.g. an archive
+"Repositories found: N", per-project recovery messages (e.g. an archive
 that could not be fetched — the repo is skipped and the scan continues), and
 other informational steps. `--interactive` also enables the full log
 automatically (interactive mode needs it), so you don't have to pass
@@ -317,7 +317,7 @@ node dist/cli.js find-matches 'string1', 'string2' `
   If `--format` conflicts with the extension of an explicit `--output` path
   (e.g. `--format txt -o result.json`), the command fails with an error and
   nothing is written.
-- **Progress** (e.g. `Обработано 3 из 12 · my-frontend-app`) and **error / summary lines**
+- **Progress** (e.g. `Processed 3 of 12 · my-frontend-app`) and **error / summary lines**
   always go to **stderr**, so the report on stdout stays clean for piping:
 
   ```bash
@@ -580,13 +580,17 @@ Test files are scanned by default — exclude them with
 
 ### Common glob patterns
 
-Paths inside the archive always start with `/` (e.g. `/src/foo.ts`), so patterns must account for that leading slash.
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`).
+
+A pattern **with a slash** matches the full path — so it must account for that
+leading slash (use `**/` to traverse directories). A pattern **without a slash**
+matches by **file name (basename)** in any directory.
 
 | Need | Pattern |
 |---|---|
 | Find test files | `**/*.test.*` |
-| Find a file by its exact name (anywhere) | `**/foo.ts` |
-| Find any `.ts` file | `**/*.ts` |
+| Find a file by its exact name (anywhere) | `foo.ts` or `**/foo.ts` |
+| Find any `.ts` file | `*.ts` or `**/*.ts` |
 | Find files only under `src/` | `**/src/**/*.ts` |
 | Skip node_modules | `**/node_modules/**` |
 

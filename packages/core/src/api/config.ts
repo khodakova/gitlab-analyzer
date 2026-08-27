@@ -22,7 +22,7 @@ export const axiosInstance = axios.create({
 
 
 /**
- * Извлекает текст тела ответа из AxiosError (если он есть) для подробного сообщения.
+ * Extracts the response body text from an AxiosError (if present) for a detailed message.
  */
 export function axiosErrorBody(e: unknown): string {
   if (!axios.isAxiosError(e)) return '';

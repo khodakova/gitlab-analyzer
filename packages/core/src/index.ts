@@ -46,7 +46,7 @@ export type {
   FindMatchesOptions,
   MatchResult,
   FileFilters,
-} from './commands/find-matches.ts';
+} from './commands/find-matches.types.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
 export { configureLogger, logger, flushLogs, formatDuration } from './utils/logger.ts';

@@ -249,6 +249,94 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
     });
   });
 
+  describe('precedence — CLI token/URL flags (--private-token / --gitlab-url)', () => {
+    it('--private-token from CLI overrides PRIVATE_TOKEN env', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: 'cli-token' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('cli-token');
+    });
+
+    it('--gitlab-url from CLI overrides GITLAB_URL env and config.gitlab.url', () => {
+      const config = {
+        ...emptyConfig(),
+        gitlab: { url: 'https://config-gitlab.example.com' },
+      };
+
+      const result = resolveOptions(
+        ['x'],
+        { gitlabUrl: 'https://cli.example.com' },
+        config as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://cli.example.com');
+    });
+
+    it('empty --private-token "" falls back to PRIVATE_TOKEN env', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: '' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe(TEST_PRIVATE_TOKEN);
+    });
+
+    it('whitespace --private-token " " falls back to PRIVATE_TOKEN env', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: '   ' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe(TEST_PRIVATE_TOKEN);
+    });
+
+    it('--private-token from CLI satisfies the required check when env is empty', () => {
+      delete process.env.PRIVATE_TOKEN;
+
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: 't' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('t');
+    });
+
+    it('--gitlab-url from CLI satisfies the required check when env and config are empty', () => {
+      delete process.env.GITLAB_URL;
+
+      const result = resolveOptions(
+        ['x'],
+        { gitlabUrl: 'https://cli.example.com' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.gitlabUrl).toBe('https://cli.example.com');
+    });
+
+    it('trims whitespace around a non-empty CLI token', () => {
+      const result = resolveOptions(
+        ['x'],
+        { privateToken: '  padded-token  ' },
+        emptyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('padded-token');
+    });
+  });
+
   describe('precedence — enableLogs (CLI > env > config > false)', () => {
     afterEach(() => {
       delete process.env.ENABLE_LOGS;
@@ -399,6 +487,54 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       );
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.resolved.metricsFile).toBe('./m.ndjson');
+    });
+  });
+
+  describe('outputFilter (CLI > config > default "all")', () => {
+    it('defaults to "all" when neither CLI nor config provides it', () => {
+      const res = resolveOptions(['x'], {}, emptyConfig() as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('all');
+    });
+
+    it('--output-filter overrides config.defaults.outputFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, outputFilter: 'found' },
+      };
+      const res = resolveOptions(['x'], { outputFilter: 'not-found' }, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('not-found');
+    });
+
+    it('falls back to config.defaults.outputFilter when CLI is silent', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, outputFilter: 'found' },
+      };
+      const res = resolveOptions(['x'], {}, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('found');
+    });
+
+    it('falls back to config.commands["find-matches"].outputFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        commands: { 'find-matches': { concurrency: 5, outputFilter: 'not-found' } },
+      };
+      const res = resolveOptions(['x'], {}, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('not-found');
+    });
+
+    it('CLI --output-filter wins over config.commands["find-matches"].outputFilter', () => {
+      const config = {
+        ...emptyConfig(),
+        commands: { 'find-matches': { concurrency: 5, outputFilter: 'not-found' } },
+      };
+      const res = resolveOptions(['x'], { outputFilter: 'all' }, config as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('all');
     });
   });
 });

@@ -47,6 +47,7 @@ vi.mock('../../utils/repo-select.ts', () => ({
 
 import { runFindMatches } from '../find-matches.ts';
 import * as loggerModule from '@gitlab-analyzer/core';
+import { axiosInstance } from '@gitlab-analyzer/core/internal';
 
 const TEST_GITLAB_URL = 'https://gitlab.example.com';
 const TEST_PRIVATE_TOKEN = 'test-token-for-vitest';
@@ -100,6 +101,38 @@ describe('runFindMatches (exported helper)', () => {
   afterEach(() => {
     stderrSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  describe('axiosInstance token/URL propagation from CLI flags', () => {
+    it('sets axiosInstance PRIVATE-TOKEN header from --private-token', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], { privateToken: 'cli-token' });
+
+      expect(axiosInstance.defaults.headers['PRIVATE-TOKEN']).toBe('cli-token');
+    });
+
+    it('sets axiosInstance baseURL from --gitlab-url', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], { gitlabUrl: 'https://cli.example.com' });
+
+      expect(axiosInstance.defaults.baseURL).toBe('https://cli.example.com');
+    });
+
+    it('uses the env token when no --private-token flag is passed', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      await runFindMatches(['needle'], {});
+
+      expect(axiosInstance.defaults.headers['PRIVATE-TOKEN']).toBe(TEST_PRIVATE_TOKEN);
+    });
   });
 
   it('merges CLI options with config defaults and forwards to findMatches', async () => {
@@ -286,7 +319,7 @@ describe('runFindMatches (exported helper)', () => {
     const result = await runFindMatches(['x'], {});
 
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('Будет выполнен поиск по 3 репозиториям:');
+    expect(stderrText).toContain('Search will run across 3 repositories:');
     expect(stderrText).toContain('alpha');
     expect(stderrText).toContain('beta');
     expect(stderrText).toContain('skip');
@@ -321,7 +354,7 @@ describe('runFindMatches (exported helper)', () => {
       await vi.advanceTimersByTimeAsync(150);
 
       const duringFetch = collectWriteCalls(stderrSpy);
-      expect(duringFetch).toContain('Получение списка репозиториев…');
+      expect(duringFetch).toContain('Fetching repository list...');
 
       resolveProjects([]);
       await runPromise
@@ -335,7 +368,7 @@ describe('runFindMatches (exported helper)', () => {
 
       expect(exitSpy).toHaveBeenCalledWith(0);
       const afterText = collectWriteCalls(stderrSpy);
-      expect(afterText).toMatch(/не найдены|фильтр|исключени/i);
+      expect(afterText).toMatch(/no repositories|filter|exclus/i);
     } finally {
       vi.useRealTimers();
       exitSpy.mockRestore();
@@ -543,7 +576,7 @@ describe('runFindMatches (exported helper)', () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(mocks.findMatches).not.toHaveBeenCalled();
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toMatch(/поиск|репозитори|cancel|отмен|ничего/i);
+    expect(stderrText).toMatch(/search|cancel|repositor|nothing/i);
     exitSpy.mockRestore();
   });
 
@@ -573,10 +606,10 @@ describe('runFindMatches (exported helper)', () => {
     expect(mocks.findMatches).not.toHaveBeenCalled();
     expect(mocks.writeFile).not.toHaveBeenCalled();
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toMatch(/не найдены|фильтр|исключени/i);
+    expect(stderrText).toMatch(/no repositories|filter|exclus/i);
     // No misleading "searching 0 repos" phase or summary.
-    expect(stderrText).not.toContain('Начинаю поиск по 0');
-    expect(stderrText).not.toContain('Отсканировано репозиториев: 0');
+    expect(stderrText).not.toContain('Starting search across 0');
+    expect(stderrText).not.toContain('Scanned repositories: 0');
     exitSpy.mockRestore();
   });
 
@@ -593,11 +626,11 @@ describe('runFindMatches (exported helper)', () => {
     await loggerModule.flushLogs();
 
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('ℹ Получение списка репозиториев');
-    expect(stderrText).toContain('Список репозиториев получен: 1');
-    expect(stderrText).toContain('ℹ Начинаю поиск по 1 репозиториям');
+    expect(stderrText).toContain('ℹ Fetching repository list');
+    expect(stderrText).toContain('Repository list fetched: 1');
+    expect(stderrText).toContain('ℹ Starting search across 1 repositories');
     // success completion — always visible
-    expect(stderrText).toContain('✓ Поиск завершён.');
+    expect(stderrText).toContain('✓ Search finished.');
   });
 
   it('prints a summary block with ⚠ errored repos and the report path', async () => {
@@ -627,11 +660,97 @@ describe('runFindMatches (exported helper)', () => {
     await loggerModule.flushLogs();
 
     const stderrText = collectWriteCalls(stderrSpy);
-    expect(stderrText).toContain('✓ Отсканировано репозиториев: 2');
-    expect(stderrText).toContain('⚠ Из них с ошибкой: 1 (bad)');
-    expect(stderrText).toContain('✓ Отчёт: /tmp/out.json');
+    expect(stderrText).toContain('✓ Scanned repositories: 2');
+    expect(stderrText).toContain('⚠ Of which errored: 1 (bad)');
+    expect(stderrText).toContain('✓ Report: /tmp/out.json');
     // blank separator line between the search output and the summary block
-    expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Отсканировано репозиториев: 2/);
+    expect(stderrText).toMatch(/\n\n\u001b\[32m✓ Scanned repositories: 2/);
+  });
+
+  describe('output-filter', () => {
+    const setupRepos = () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      // good = has matches; empty = scanned, no matches; bad = errored.
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'good', description: null },
+        { id: 2, name: 'empty', description: null },
+        { id: 3, name: 'bad', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(async (opts) => {
+        opts.onProgress?.(1, 3, 'good');
+        opts.onProgress?.(2, 3, 'empty');
+        opts.onProgress?.(3, 3, 'bad', 'boom');
+        return [
+          {
+            projectId: 1,
+            projectName: 'good',
+            projectDescription: null,
+            resultsLength: 1,
+            results: [
+              { filename: '/src/a.ts', matches: ['needle'], content: ['needle'] },
+            ],
+          },
+        ];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+    };
+
+    it('--output-filter found keeps only repos with matches (errors excluded)', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], { outputFilter: 'found' });
+      const names = result.report.repositories.map((r) => r.projectName);
+      expect(names).toEqual(['good']);
+    });
+
+    it('--output-filter not-found keeps only repos without matches (errors excluded)', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], { outputFilter: 'not-found' });
+      const names = result.report.repositories.map((r) => r.projectName);
+      expect(names).toEqual(['empty']);
+    });
+
+    it('default (all) keeps every scanned repo including errors', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], {});
+      const names = result.report.repositories.map((r) => r.projectName).sort();
+      expect(names).toEqual(['bad', 'empty', 'good']);
+    });
+
+    it('--output-filter all behaves like the default', async () => {
+      setupRepos();
+      const result = await runFindMatches(['needle'], { outputFilter: 'all' });
+      const names = result.report.repositories.map((r) => r.projectName).sort();
+      expect(names).toEqual(['bad', 'empty', 'good']);
+    });
+
+    it('writes an empty report + warning when no repo matches the filter', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      // Every scanned repo has no matches and no errors → 'found' yields nothing.
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 2, name: 'empty', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(async (opts) => {
+        opts.onProgress?.(1, 1, 'empty');
+        return [];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindMatches(['needle'], { outputFilter: 'found' });
+      expect(result.report.repositories).toEqual([]);
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toMatch(/No repositories matched --output-filter found/);
+      // The report file is still written (empty).
+      expect(mocks.writeFile).toHaveBeenCalled();
+    });
+
+    it('applies the filter to --stdout payload as well', async () => {
+      setupRepos();
+      await runFindMatches(['needle'], { outputFilter: 'found', stdout: true });
+      const stdoutText = collectWriteCalls(stdoutSpy);
+      expect(stdoutText).toContain('good');
+      expect(stdoutText).not.toContain('empty');
+      expect(stdoutText).not.toContain('bad');
+    });
   });
 
   describe('performance metrics (--metrics-file + stderr summary)', () => {
@@ -715,7 +834,7 @@ describe('runFindMatches (exported helper)', () => {
       expect(result.report).toBeTruthy();
       expect(result.outputPath).toBeTruthy();
       await loggerModule.flushLogs();
-      expect(collectWriteCalls(stderrSpy)).toContain('Не удалось записать файл метрик (');
+      expect(collectWriteCalls(stderrSpy)).toContain('Failed to write metrics file (');
     });
 
     it('writes run+summary with exitReason=cancel on interactive empty selection', async () => {

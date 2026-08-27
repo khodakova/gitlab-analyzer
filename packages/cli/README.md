@@ -49,7 +49,7 @@ A `.env` is enough — no config file required.
 
    ```ini
    GITLAB_URL=https://gitlab.example.com
-   PRIVATE_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+   PRIVATE_TOKEN=YOUR_TOKEN
    ```
 
 2. Run a search:
@@ -74,8 +74,8 @@ gitlab-analyzer find-matches [options] <strings...>
 | `-r, --repo-filter <str>` | Substring filter for project names (passed to GitLab `search=`) | — |
 | `-e, --exclude <list>` | Comma-separated repo names to skip | `[]` |
 | `-b, --branch <name>` | Branch to scan in every project | `develop` |
-| `--file-include <list>` | Comma-separated glob patterns; only files matching at least one pattern are scanned | `[]` (scan all) |
-| `--file-exclude <list>` | Comma-separated glob patterns; matching files are always skipped (wins over `--file-include`) | `[]` |
+| `--file-include <list>` | Comma-separated glob patterns; only files matching at least one pattern are scanned. A pattern without `/` matches by file name (basename) in any directory; with `/` — by full path | `[]` (scan all) |
+| `--file-exclude <list>` | Comma-separated glob patterns; matching files are always skipped (wins over `--file-include`). Same basename/full-path rule as `--file-include` | `[]` |
 | `--format <txt\|json>` | Report format (also drives the file extension) | `json` |
 | `--stdout` | Also write the report to stdout (handy for piping) | off |
 | `-o, --output <path>` | Where to write the report; omit for an auto-generated name | auto-name |
@@ -87,6 +87,17 @@ gitlab-analyzer find-matches [options] <strings...>
 
 > Note: if `--format` conflicts with the extension of an explicit `--output` (e.g. `--format txt -o out.json`), the command fails with an error and writes nothing.
 
+### Global flags
+
+These are **top-level** flags (before the subcommand) — `gitlab-analyzer [global flags] find-matches ...`:
+
+| Option | Description | Default |
+|---|---|---|
+| `--private-token <token>` | GitLab personal access token. Overrides `PRIVATE_TOKEN` env | env |
+| `--gitlab-url <url>` | Base URL of the GitLab instance. Overrides `GITLAB_URL` env and `gitlab.url` config | env / config |
+
+> **SECURITY:** passing a token via `--private-token` on the command line exposes it in shell history, the process list, and CI logs. Prefer `PRIVATE_TOKEN` env (or `.env`) as the primary way to supply the token; use the flag only when env is impractical.
+
 ### Examples
 
 **Linux / macOS (bash/zsh):**
@@ -94,6 +105,16 @@ gitlab-analyzer find-matches [options] <strings...>
 ```bash
 # Minimal run (requires .env)
 gitlab-analyzer find-matches 'console.log' 'debugger'
+
+# Token from an environment variable (no .env needed)
+export PRIVATE_TOKEN="$MY_GITLAB_TOKEN"
+export GITLAB_URL="https://gitlab.example.com"
+gitlab-analyzer find-matches 'console.log'
+
+# Or pass the env var straight into the flag for a single run
+gitlab-analyzer find-matches 'console.log' \
+  --private-token "$PRIVATE_TOKEN" \
+  --gitlab-url "$GITLAB_URL"
 
 # Frontend repos only, skipping archives, on your branch, report to a file
 gitlab-analyzer find-matches 'TODO' 'FIXME' \
@@ -131,7 +152,17 @@ gitlab-analyzer find-matches 'TODO' 'FIXME' `
   -o "./results/run-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
 
 # Token set inline
-$env:PRIVATE_TOKEN="glpat-xxxx"; gitlab-analyzer find-matches 'console.log'
+$env:PRIVATE_TOKEN="YOUR_TOKEN"; gitlab-analyzer find-matches 'console.log'
+
+# Token from an environment variable (no .env needed)
+$env:PRIVATE_TOKEN=$env:MY_GITLAB_TOKEN
+$env:GITLAB_URL="https://gitlab.example.com"
+gitlab-analyzer find-matches 'console.log'
+
+# Or pass the env var straight into the flag for a single run
+gitlab-analyzer find-matches 'console.log' `
+  --private-token $env:PRIVATE_TOKEN `
+  --gitlab-url $env:GITLAB_URL
 
 # To stdout, parsed with jq
 gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
@@ -140,11 +171,19 @@ gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
 **Windows (cmd):** line continuation uses `^`, env vars via `set`:
 
 ```bat
-set PRIVATE_TOKEN=glpat-xxxx
+set PRIVATE_TOKEN=YOUR_TOKEN
 gitlab-analyzer find-matches "console.log" "debugger" ^
   --repo-filter "frontend" ^
   --branch develop ^
   -o results.json
+
+:: Token from an environment variable (no .env needed)
+set PRIVATE_TOKEN=%MY_GITLAB_TOKEN%
+set GITLAB_URL=https://gitlab.example.com
+gitlab-analyzer find-matches "console.log"
+
+:: Or pass the env var straight into the flag for a single run
+gitlab-analyzer find-matches "console.log" --private-token %PRIVATE_TOKEN% --gitlab-url %GITLAB_URL%
 ```
 
 ---
@@ -154,13 +193,13 @@ gitlab-analyzer find-matches "console.log" "debugger" ^
 Option resolution precedence (highest wins):
 
 ```
-1. CLI flag                  e.g. --branch main
+1. CLI flag                  e.g. --branch main, --private-token, --gitlab-url
 2. Environment variable      GITLAB_URL, PRIVATE_TOKEN (usually from .env)
 3. gitlab-analyzer.json      defaults.*, commands.find-matches.*, gitlab.url
 4. Built-in default          branch="develop", concurrency=5, fileInclude=[], fileExclude=[]
 ```
 
-A config is useful for **persistent, non-secret** values (branch, exclusions, concurrency, output path). **Never** put tokens in a config — env only.
+A config is useful for **persistent, non-secret** values (branch, exclusions, concurrency, output path). **Never** put tokens in a config — env only (or the `--private-token` CLI flag).
 
 ```json
 {
@@ -201,22 +240,22 @@ into **levels**, each with its own symbol and color:
 | Level | Symbol / color | Visible | Typical use |
 |---|---|---|---|
 | `debug` | `[debug]` gray | only with `--enable-logs` | per-file detail: archive download, unzip steps |
-| `info` | `ℹ` cyan | always | phase boundaries: "Получение списка…", "Начинаю поиск…" |
-| `success` | `✓` green | always | completions: "Готово: repo", "Поиск завершён.", final summary |
-| `warn` | `⚠` yellow | always | recoverable problems: "Архив не получен", "репо раздуто" |
+| `info` | `ℹ` cyan | always | phase boundaries: "Fetching repository list…", "Starting search…" |
+| `success` | `✓` green | always | completions: "Done: repo", "Search finished.", final summary |
+| `warn` | `⚠` yellow | always | recoverable problems: "Archive not fetched", "repo bloated" |
 | `error` | `✗` red | always | fatal CLI errors |
 
 `--enable-logs` (or `--interactive`) still turns on the full `[debug]` trace;
 `info`/`success`/`warn` are shown regardless for a readable default run. Blank
 lines separate the phases (list → search → summary), and the run ends with a
-summary block: `✓ Отсканировано репозиториев: N`, an optional `⚠ Из них с
-ошибкой: K (repos…)` line, and `✓ Отчёт: path`. Durations use a latin `s`
+summary block: `✓ Scanned repositories: N`, an optional `⚠ Of which errored:
+K (repos…)` line, and `✓ Report: path`. Durations use a latin `s`
 (`0.3s`). Colors respect `NO_COLOR` and auto-detect a TTY; there is no
 `--no-color` flag (set `NO_COLOR=1` instead).
 
 If no repositories match the filters (`--repo-filter` / `--exclude`), the run
-stops early with `ℹ Репозитории не найдены: фильтр/исключения не дали
-результатов.` and exits `0` — it does not start a meaningless zero-repo
+stops early with `ℹ No repositories found: filters/exclusions produced no
+results.` and exits `0` — it does not start a meaningless zero-repo
 search or print an empty summary.
 
 ## Exporting results
@@ -233,7 +272,7 @@ gitlab-analyzer find-matches 'TODO' --stdout | jq '.repositories[].projectName'
 ## Performance metrics
 
 Every run prints a compact `Metrics:` summary line to **stderr** right after the
-`✓ Отсканировано…` block — run-level aggregates only, so the normal run stays
+`✓ Scanned…` block — run-level aggregates only, so the normal run stays
 uncluttered:
 
 ```
@@ -270,18 +309,22 @@ file is a warning on stderr, never a fatal error — the report is already writt
 
 ### Common glob patterns
 
-Paths inside the archive always start with `/` (e.g. `/src/foo.ts`), so patterns must account for that leading slash.
+Paths inside the archive always start with `/` (e.g. `/src/foo.ts`).
+
+A pattern **with a slash** matches the full path — so it must account for that
+leading slash (use `**/` to traverse directories). A pattern **without a slash**
+matches by **file name (basename)** in any directory.
 
 | Need | Pattern |
 |---|---|
 | Find test files | `**/*.test.*` |
-| Find a file by its exact name (anywhere) | `**/foo.ts` |
-| Find any `.ts` file | `**/*.ts` |
+| Find a file by its exact name (anywhere) | `foo.ts` or `**/foo.ts` |
+| Find any `.ts` file | `*.ts` or `**/*.ts` |
 | Find files only under `src/` | `**/src/**/*.ts` |
 | Skip node_modules | `**/node_modules/**` |
 - **Too many requests on a big instance?** Lower `--concurrency 2`.
 - **401 Unauthorized** — check `PRIVATE_TOKEN` (needs `read_api` scope).
-- Tokens are read **only** from env vars / `.env` — never from config.
+- Tokens are read **only** from env vars / `.env` or the `--private-token` CLI flag — never from config.
 
 ## CLI help
 

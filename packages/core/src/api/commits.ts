@@ -1,7 +1,7 @@
 import { axiosInstance } from './config.ts';
 
 /**
- * Получить коммиты по файлу
+ * Get commits by file
  */
 export function getCommits(projectId: number, params?: {path: string, ref_name: string, since: string}) {
   return axiosInstance.get<Blob>(`/api/v4/projects/${projectId}/repository/commits`, {
@@ -16,14 +16,14 @@ export function getCommits(projectId: number, params?: {path: string, ref_name: 
 }
 
 /**
- * Записать (создать/обновить) файл в репозитории одним коммитом через
+ * Write (create/update) a file in the repository with a single commit via the
  * GitLab Repository Files API.
  *
- * @param params.repoId идентификатор проекта в GitLab.
- * @param params.filePath путь к файлу относительно корня репозитория (например, `package.json`).
- * @param params.branch имя ветки, в которую коммитим.
- * @param params.content новое содержимое файла в виде строки.
- * @param params.commitMessage текст коммита.
+ * @param params.repoId project identifier in GitLab.
+ * @param params.filePath path to the file relative to the repository root (e.g. `package.json`).
+ * @param params.branch name of the branch we commit to.
+ * @param params.content new file content as a string.
+ * @param params.commitMessage commit text.
  */
 export async function commitFile({
   repoId,
