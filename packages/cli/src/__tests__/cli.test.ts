@@ -273,6 +273,43 @@ describe('cli > buildProgram', () => {
       expect(caught).toBeInstanceOf(CommanderError);
       expect((caught as CommanderError).code).toBe('commander.missingArgument');
     });
+
+    it('throws CommanderError for find-matches-only flags on list-repos', async () => {
+      const program = buildProgram();
+
+      const caught = await program
+        .parseAsync(['node', 'gitlab-analyzer', 'list-repos', '--branch', 'main'])
+        .catch((e: unknown) => e);
+
+      expect(caught).toBeInstanceOf(CommanderError);
+      expect((caught as CommanderError).code).toBe('commander.unknownOption');
+    });
+  });
+
+  describe('list-repos wiring', () => {
+    it('routes to runListRepos: fetches with --repo-filter, prints sorted names to stdout', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 2, name: 'beta', description: null },
+        { id: 1, name: 'alpha', description: null },
+      ]);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'list-repos',
+        '--repo-filter',
+        'front',
+      ]);
+
+      expect(mocks.getAllProjects).toHaveBeenCalledWith('front', expect.anything());
+      expect(collectWriteCalls(stdoutSpy)).toBe('alpha\nbeta\n');
+      expect(collectWriteCalls(stderrSpy)).toContain(
+        'Found 2 repositories matching the filters.',
+      );
+    });
   });
 
   describe('end-to-end mocked run', () => {

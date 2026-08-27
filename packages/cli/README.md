@@ -188,6 +188,44 @@ gitlab-analyzer find-matches "console.log" --private-token %PRIVATE_TOKEN% --git
 
 ---
 
+## `list-repos` — preview the repo list
+
+Prints the repositories that `find-matches` would scan with the same
+repo-level filters — **without downloading archives or running a search**.
+Use it to evaluate and tune `--repo-filter` / `--exclude` (and the config
+`defaults.*`) before committing to a long scan.
+
+```bash
+gitlab-analyzer list-repos --repo-filter 'frontend' --exclude 'wip-repo'
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `-r, --repo-filter <str>` | Substring filter for project names (passed to GitLab `search=`) | — |
+| `-e, --exclude <list>` | Comma-separated repo names to skip | `[]` |
+
+Plus the [global flags](#global-flags) (`--gitlab-url`, `--private-token`).
+
+Behaviour:
+
+- **Names go to stdout** — one per line, sorted alphabetically; progress and
+  the final `Found N repositories matching the filters.` summary go to
+  **stderr**, so the list is pipeable:
+
+  ```bash
+  gitlab-analyzer list-repos --repo-filter 'frontend' | wc -l
+  ```
+
+- **Only repo-level filters apply.** `--branch` and the file globs
+  (`--file-include` / `--file-exclude`) act during the scan, not at list
+  time — repos with a missing branch or fully-filtered-out files still
+  appear here.
+- **Empty result** — `No repositories found: filters/exclusions produced no
+  results.` on stderr, exit code `0` (same semantics as the no-repos guard
+  in `find-matches`).
+
+---
+
 ## Configuration (optional)
 
 Option resolution precedence (highest wins):

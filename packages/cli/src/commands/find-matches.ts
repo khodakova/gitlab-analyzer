@@ -135,9 +135,24 @@ async function writeSummaryRecord(
   }
 }
 
-// Resolve options from config/env/CLI and set up side-effects (logger, axios URL).
-async function prepareRun(
-  strings: string[],
+/**
+ * Shared pre-flight for every subcommand: resolve options from
+ * config/env/CLI and set up side-effects (logger, axios URL/token).
+ *
+ * Split out of {@link prepareRun} so other commands (e.g. `list-repos`) can
+ * reuse the resolution + API-access wiring without inheriting find-matches
+ * specifics — notably the `commands.find-matches.output` config default,
+ * which must NOT trip `assertFormatPathConsistency` in commands that never
+ * write a report.
+ *
+ * @param commandName - Subcommand name used in the missing-options error.
+ * @param strings - Positional strings; empty only for commands that don't
+ *   take any (they pass a placeholder so the required-strings check is
+ *   satisfied — see `runListRepos`).
+ */
+export async function prepareApiAccess(
+  commandName: string,
+  strings: readonly string[],
   opts: FindMatchesCliOptions,
 ): Promise<{ resolved: ResolvedFindMatchesOptions }> {
   const config = await loadConfig();
@@ -148,15 +163,11 @@ async function prepareRun(
       .map((e) => `  - ${e.field}: ${e.message}`)
       .join('\n');
     throw new Error(
-      `Cannot run find-matches — missing required options:\n${lines}`,
+      `Cannot run ${commandName} — missing required options:\n${lines}`,
     );
   }
 
   const { resolved } = resolution;
-
-  // Format/extension consistency is validated early, before any network work —
-  // a silent mismatch would otherwise waste a full scan.
-  assertFormatPathConsistency(resolved.output, resolved.format);
 
   // Enable the central logger for the whole process: debug/API/recovery logs
   // are only printed when `--enable-logs` was resolved, OR when running
@@ -180,7 +191,25 @@ async function prepareRun(
   return { resolved };
 }
 
-async function fetchRepoList(
+/**
+ * find-matches pre-flight: shared option resolution + API access wiring
+ * ({@link prepareApiAccess}), plus the find-matches-specific format/output
+ * consistency check.
+ */
+async function prepareRun(
+  strings: string[],
+  opts: FindMatchesCliOptions,
+): Promise<{ resolved: ResolvedFindMatchesOptions }> {
+  const { resolved } = await prepareApiAccess('find-matches', strings, opts);
+
+  // Format/extension consistency is validated early, before any network work —
+  // a silent mismatch would otherwise waste a full scan.
+  assertFormatPathConsistency(resolved.output, resolved.format);
+
+  return { resolved };
+}
+
+export async function fetchRepoList(
   repoNameFilter: string | undefined,
   metrics: SearchMetrics,
 ): Promise<SearchProjectsItem[]> {
