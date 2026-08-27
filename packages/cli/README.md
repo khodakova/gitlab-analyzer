@@ -18,9 +18,9 @@ Requires **Node.js ≥ 22**.
 
 ```bash
 # Global (CLI)
-npm install -g gitlab-analyzer
+npm install -g @gitlab-analyzer/cli
 # or
-yarn global add gitlab-analyzer
+yarn global add @gitlab-analyzer/cli
 ```
 
 After a global install the `gitlab-analyzer` binary is on your `PATH`.
@@ -30,13 +30,13 @@ After a global install the `gitlab-analyzer` binary is on your `PATH`.
 No global install needed. `npx` pulls the package on the fly:
 
 ```bash
-npx gitlab-analyzer find-matches 'console.log' 'debugger'
+npx @gitlab-analyzer/cli find-matches 'console.log' 'debugger'
 ```
 
 For a stable version, pin it explicitly:
 
 ```bash
-npx gitlab-analyzer@0.1.0 find-matches 'console.log'
+npx @gitlab-analyzer/cli@0.1.0 find-matches 'console.log'
 ```
 
 > `npx` re-checks/downloads the package each run unless it's cached. For heavy, repeated use install globally once.
@@ -135,7 +135,7 @@ gitlab-analyzer find-matches 'UPDATE' --stdout | jq '.metadata.branch'
 # Interactive repo selection
 gitlab-analyzer find-matches 'release-it' --interactive
 # Without installing — via npx
-npx gitlab-analyzer find-matches 'console.log' 'debugger'
+npx @gitlab-analyzer/cli find-matches 'console.log' 'debugger'
 ```
 
 **Windows (PowerShell):** line continuation uses a backtick (`` ` ``); set env vars via `$env:`.
