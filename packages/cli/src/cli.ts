@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { logger, flushLogs } from '@gitlab-analyzer/core';
 import { runFindMatches } from './commands/find-matches.ts';
 import { runListRepos } from './commands/list-repos.ts';
-import type { FindMatchesCliOptions } from './utils/options.ts';
+import { runFetchFiles } from './commands/fetch-files.ts';
+import type { FindMatchesCliOptions, FetchFilesCliOptions } from './utils/options.ts';
 
 // The thin CLI layer only wires commander to the command implementations.
 // All option resolution, repo fetching, search orchestration, report
@@ -176,6 +177,29 @@ export function buildProgram(): Command {
           gitlabUrl: global.gitlabUrl,
         };
         await runListRepos(merged);
+      } catch (err) {
+        await handleActionError(err);
+      }
+    });
+
+  program
+    .command('fetch-files')
+    .description('Download files matching glob patterns from every reachable GitLab project (tree + raw blobs)')
+    .argument('<filenames...>', 'One or more glob patterns; without "/" matches basename in any directory, with "/" — full path')
+    .addOption(new Option('-r, --repo-filter <str>', 'Substring filter for project names (passed to GitLab search=)'))
+    .option('-e, --exclude <list>', 'Comma-separated list of repo names to skip', parseCommaList)
+    .option('-b, --branch <name>', 'Branch to fetch files from')
+    .option('--file-exclude <list>', 'Comma-separated glob patterns; matching files are skipped (wins over positional patterns)', parseCommaList)
+    .option('-o, --output <dir>', 'Directory to create the results folder in; omit to use cwd')
+    .addOption(new Option('--format <json|ndjson|txt>', 'Output layout (default json: one <repo>.json per repo).').choices(['json', 'ndjson', 'txt']))
+    .option('-c, --concurrency <n>', 'Max parallel repo fetches', (val: string) => parseInt(val, 10))
+    .option('--interactive', 'Pick repos manually before fetching')
+    .option('--enable-logs', 'Enable debug/API logging (also enabled automatically with --interactive)')
+    .option('--metrics-file <path>', 'Write performance metrics (NDJSON) to this file. Diagnostic only.')
+    .action(async (patterns: string[], opts: FetchFilesCliOptions) => {
+      try {
+        const global = program.opts<{ privateToken?: string; gitlabUrl?: string }>();
+        await runFetchFiles(patterns, { ...opts, privateToken: global.privateToken, gitlabUrl: global.gitlabUrl });
       } catch (err) {
         await handleActionError(err);
       }

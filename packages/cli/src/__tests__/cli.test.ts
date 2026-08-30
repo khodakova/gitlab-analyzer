@@ -8,6 +8,7 @@ import os from 'node:os';
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   findMatches: vi.fn(),
+  runFetchFiles: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
   repoSelect: vi.fn(),
@@ -51,6 +52,10 @@ vi.mock('node:fs', () => ({
 vi.mock('../utils/repo-select.ts', () => ({
   repoSelect: mocks.repoSelect,
   enquirerRepoSelect: vi.fn(),
+}));
+
+vi.mock('../commands/fetch-files.ts', () => ({
+  runFetchFiles: mocks.runFetchFiles,
 }));
 
 import { buildProgram, runCli } from '../cli.ts';
@@ -107,6 +112,7 @@ describe('cli > buildProgram', () => {
     }) as never);
     mocks.loadConfig.mockReset();
     mocks.findMatches.mockReset();
+    mocks.runFetchFiles.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -177,6 +183,39 @@ describe('cli > buildProgram', () => {
       const out = collectWriteCalls(stdoutSpy) + collectWriteCalls(stderrSpy);
       expect(out).toContain('find-matches');
       expect(out).toMatch(/search/i);
+    });
+  });
+
+  describe('--help on fetch-files subcommand', () => {
+    it('lists every fetch-files option', async () => {
+      const program = buildProgram();
+
+      await program
+        .parseAsync([
+          'node',
+          'gitlab-analyzer',
+          'fetch-files',
+          '--help',
+        ])
+        .catch((e: unknown) => {
+          if (e instanceof CommanderError) return;
+          throw e;
+        });
+
+      const out = collectWriteCalls(stdoutSpy) + collectWriteCalls(stderrSpy);
+      expect(out).toContain('--repo-filter');
+      expect(out).toContain('--exclude');
+      expect(out).toContain('--branch');
+      expect(out).toContain('--file-exclude');
+      expect(out).toContain('--output');
+      expect(out).toContain('--format');
+      expect(out).toContain('--concurrency');
+      expect(out).toContain('--interactive');
+      expect(out).toContain('--enable-logs');
+      expect(out).toContain('--metrics-file');
+      // Plus the positional argument and global --help.
+      expect(out).toContain('<filenames...>');
+      expect(out).toContain('--help');
     });
   });
 
@@ -274,6 +313,17 @@ describe('cli > buildProgram', () => {
       expect((caught as CommanderError).code).toBe('commander.missingArgument');
     });
 
+    it('throws CommanderError when the required <filenames...> argument is missing on fetch-files', async () => {
+      const program = buildProgram();
+
+      const caught = await program
+        .parseAsync(['node', 'gitlab-analyzer', 'fetch-files'])
+        .catch((e: unknown) => e);
+
+      expect(caught).toBeInstanceOf(CommanderError);
+      expect((caught as CommanderError).code).toBe('commander.missingArgument');
+    });
+
     it('throws CommanderError for find-matches-only flags on list-repos', async () => {
       const program = buildProgram();
 
@@ -309,6 +359,40 @@ describe('cli > buildProgram', () => {
       expect(collectWriteCalls(stderrSpy)).toContain(
         'Found 2 repositories matching the filters.',
       );
+    });
+  });
+
+  describe('fetch-files wiring', () => {
+    it('routes to runFetchFiles with parsed patterns and merged global opts', async () => {
+      mocks.runFetchFiles.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'fetch-files',
+        '**/*.ts',
+        '--format',
+        'ndjson',
+        '-o',
+        './out',
+        '-e',
+        'a, b',
+        '--private-token',
+        'cli-token',
+        '--gitlab-url',
+        'https://cli.example.com',
+      ]);
+
+      expect(mocks.runFetchFiles).toHaveBeenCalledTimes(1);
+      const [patterns, opts] = mocks.runFetchFiles.mock.calls[0];
+      expect(patterns).toEqual(['**/*.ts']);
+      expect(opts.format).toBe('ndjson');
+      expect(opts.output).toBe('./out');
+      expect(opts.exclude).toEqual(['a', 'b']);
+      expect(opts.privateToken).toBe('cli-token');
+      expect(opts.gitlabUrl).toBe('https://cli.example.com');
     });
   });
 
@@ -676,6 +760,7 @@ describe('cli > runCli', () => {
     }) as never);
     mocks.loadConfig.mockReset();
     mocks.findMatches.mockReset();
+    mocks.runFetchFiles.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -727,6 +812,13 @@ describe('cli > runCli', () => {
   it('exits with code 2 when required <strings...> argument is missing', async () => {
     await expect(
       runCli(['node', 'gitlab-analyzer', 'find-matches']),
+    ).rejects.toThrow('process.exit(2)');
+    expect(exitSpy).toHaveBeenCalledWith(2);
+  });
+
+  it('exits with code 2 when required <filenames...> argument is missing on fetch-files', async () => {
+    await expect(
+      runCli(['node', 'gitlab-analyzer', 'fetch-files']),
     ).rejects.toThrow('process.exit(2)');
     expect(exitSpy).toHaveBeenCalledWith(2);
   });
