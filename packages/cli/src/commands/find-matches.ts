@@ -4,7 +4,6 @@ import { green, yellow } from 'colorette';
 import {
   findMatches,
   loadConfig,
-  configureLogger,
   logger,
   flushLogs,
   formatDuration,
@@ -13,12 +12,12 @@ import {
   type RepoInfo,
 } from '@gitlab-analyzer/core';
 import {
-  axiosInstance,
   getAllProjects,
   type SearchProjectsItem,
   type SearchMetrics,
   type RepoTiming,
 } from '@gitlab-analyzer/core/internal';
+import { applyApiAccess } from '../utils/api-access.ts';
 import { repoSelect } from '../utils/repo-select.ts';
 import { progress, report, renderProgressFrame } from '../utils/progress.ts';
 import {
@@ -169,24 +168,10 @@ export async function prepareApiAccess(
 
   const { resolved } = resolution;
 
-  // Enable the central logger for the whole process: debug/API/recovery logs
-  // are only printed when `--enable-logs` was resolved, OR when running
-  // interactively (interactive mode needs the full log to drive the picker).
-  // Must run before any API calls below so the debug lines they emit are
-  // visible/hidden correctly.
-  configureLogger({ enabled: resolved.enableLogs || resolved.interactive });
-
-  // Propagate the resolved GitLab URL to the module-level axiosInstance so
-  // HTTP requests go to the right host. Necessary when only `config.gitlab.url`
-  // (not `GITLAB_URL` env) is set, since `axiosInstance` was created at module
-  // load before resolution ran. When env already provides the URL,
-  // `axiosInstance.defaults.baseURL` matches `resolved.gitlabUrl` and this
-  // assignment is a no-op.
-  axiosInstance.defaults.baseURL = resolved.gitlabUrl;
-  // Propagate the resolved GitLab token to the module-level axiosInstance so
-  // requests carry the effective token (CLI `--private-token` > PRIVATE_TOKEN
-  // env). `resolveOptions` guarantees `resolved.privateToken` is non-empty.
-  axiosInstance.defaults.headers['PRIVATE-TOKEN'] = resolved.privateToken;
+  // Shared API-access wiring: logger + axios URL/token (moved to
+  // utils/api-access.ts so other subcommands reuse it without inheriting
+  // find-matches' resolveOptions / output config default).
+  await applyApiAccess(resolved);
 
   return { resolved };
 }
@@ -230,9 +215,11 @@ export async function fetchRepoList(
 
 // Filter the fetched repo list and decide whether/how to scan: interactive picker
 // (cancel → exit 0) or headless (empty list → exit 0, else print the repo list).
-async function resolveReposToScan(
+// Shared by find-matches and fetch-files; the config pick keeps the contract to
+// only the fields both commands share.
+export async function resolveReposToScan(
   allProjects: SearchProjectsItem[],
-  resolvedConfig: ResolvedFindMatchesOptions,
+  resolvedConfig: Pick<ResolvedFindMatchesOptions, 'excludeRepos' | 'interactive'>,
   writeSummary: (reason: 'complete' | 'cancel' | 'no-repos') => Promise<void>,
 ): Promise<{
   repos: RepoInfo[];

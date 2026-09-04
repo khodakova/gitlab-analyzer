@@ -8,7 +8,12 @@
 - **`gitlab-analyzer find-matches <strings...>`** — find one or more substrings
   across every project in a GitLab instance, with filters for repo name,
   branch, and glob-based file include/exclude.
-- **Programmatic API** — `import { findMatches, loadConfig } from 'gitlab-analyzer'`
+- **`gitlab-analyzer fetch-files <patterns...>`** — download every file
+  matching the given glob patterns from all reachable projects: text files
+  of any size are embedded as UTF-8 in the report, binary files are handed
+  to a `saveFile` hook for separate storage. See the
+  [CLI package README](../cli/README.md) for the full flag reference.
+- **Programmatic API** — `import { findMatches, fetchFiles, loadConfig } from 'gitlab-analyzer'`
   for custom post-processing pipelines.
 - **Config-driven** — JSON / JS / TS config files via
   [cosmiconfig](https://github.com/davidtheclark/cosmiconfig), validated against
@@ -436,6 +441,75 @@ CLI surfaces it via `--metrics-file`. The first-class API to get metrics is
 accumulator (typed as `SearchMetrics`, from `@gitlab-analyzer/core/internal`)
 that collects the same data plus list metrics in one place for CLI-style tools.
 
+### `fetchFiles()`
+
+`fetchFiles` walks the same repo set as `findMatches` (same filters:
+`repoNameFilter`, `excludeRepos`, `selectedRepos`, `projects`, `fileExclude`,
+same `concurrency` default of 5 — per repo, not per file) and downloads every
+file matching the glob `patterns` on the given `branch`. Instead of searching
+content it returns the files themselves, so the persistence decision belongs
+to you via the `saveFile` hook:
+
+```ts
+import { writeFile, mkdir } from 'node:fs/promises';
+import {
+  fetchFiles,
+  loadConfig,
+  type SaveFileInput,
+} from 'gitlab-analyzer';
+
+const config = await loadConfig();
+
+const result = await fetchFiles({
+  patterns: ['**/*.env', '**/*.yml'],
+  branch: config.defaults.branch,
+  repoNameFilter: 'frontend',
+  fileExclude: ['**/node_modules/**'],
+  saveFile: async (input: SaveFileInput) => {
+    const dir = `./fetched/${input.repo}`;
+    await mkdir(dir, { recursive: true });
+    const dest = `${dir}/${input.path.replace(/\//g, '__')}`;
+    await writeFile(dest, input.data); // data is always a full Buffer
+    return { savedAs: dest };
+  },
+  onProgress: (done, total, currentRepo, error) => {
+    process.stderr.write(`[${done}/${total}] ${currentRepo}${error ? ` (${error})` : ''}\n`);
+  },
+});
+
+// Custom post-processing — every file of every repo is in the result
+for (const repo of result.repos) {
+  if (repo.status === 'error') continue;
+  const embedded = repo.files.filter((f) => f.status === 'fetched');
+  console.log(repo.projectName, embedded.map((f) => f.path));
+}
+```
+
+Key contract points:
+
+- **No disk writes without `saveFile`.** `fetchFiles` itself never writes
+  files and never calls `process.exit` — the `saveFile` hook is the only
+  write path. Core decides **what** each file is (`status` plus the full
+  file content as a `Buffer` in `data`); the hook decides **where** (naming,
+  path safety, collision handling). Files with status `failed` never reach
+  the hook. The `savedAs` you return (or `null`) is written back into the
+  matching `FetchedFile`.
+- **No size cap.** Every blob is read fully into a `Buffer` and passed to
+  `saveFile` — as UTF-8-validated `content` with status `fetched` (text of
+  any size), or as status `binary` (non-UTF-8) with `content: null`. There
+  is no streaming/large branch anymore: `data` is always a `Buffer` and
+  `bytes` is always its length.
+- **Return shape.** `{ repos: FetchedRepo[] }` — one entry per repo with
+  `status` (`fetched` / `not-found` / `partial` / `error`), counters
+  (`filesTotal` / `filesFetched` / `filesFailed`), `truncated`, `error`,
+  and a `files` array where every processed file lands with its own
+  `status` (`fetched` / `binary` / `failed`), `content` (embedded
+  text only), `savedAs` and `error`. Unlike the CLI report, the library
+  result has no `branchExists` field — the CLI derives it from `error`.
+- All types (`FetchFilesOptions`, `FetchFilesResult`, `FetchedRepo`,
+  `FetchedFile`, `FetchedFileStatus`, `RepoStatus`, `SaveFileInput`,
+  `SaveFileResult`) are exported from `gitlab-analyzer`.
+
 ## Output Schema
 
 ### Library API (`findMatches`)
@@ -455,6 +529,40 @@ type MatchResult = {
     filename: string;    // e.g. "src/components/Foo.ts"
     matches: string[];   // which of `searchStrings` hit
     content: string[];   // full lines of the matching file
+  }>;
+};
+```
+
+### Library API (`fetchFiles`)
+
+`fetchFiles` returns `{ repos: FetchedRepo[] }` — one entry per repo whose
+file list was retrieved (including repos with zero matching files and repos
+that failed mid-walk; those carry `error`). Text content is embedded for
+every UTF-8 file regardless of size (`FetchedFile.content`); binary files
+are handed to the `saveFile` hook instead.
+
+```ts
+type FetchedRepo = {
+  projectId: number;
+  projectName: string;
+  webUrl: string | null;
+  branch: string;
+  status: 'fetched' | 'not-found' | 'partial' | 'error';
+  filesTotal: number;
+  filesFetched: number;
+  filesFailed: number;
+  error: string | null;
+  truncated: boolean;  // tree-pagination guard fired — file list may be incomplete
+  files: Array<{
+    projectId: number;
+    repo: string;
+    branch: string;
+    path: string;              // repo-relative, no leading slash
+    bytes: number | null;      // null only for failed
+    status: 'fetched' | 'binary' | 'failed';
+    content: string | null;    // embedded text only (status 'fetched')
+    savedAs: string | null;    // from the saveFile hook
+    error: string | null;
   }>;
 };
 ```
@@ -616,14 +724,16 @@ Both module formats are published from a single source tree:
 
 ```js
 // ESM
-import { findMatches, loadConfig } from 'gitlab-analyzer'
+import { findMatches, fetchFiles, loadConfig } from 'gitlab-analyzer'
 
 // CJS
-const { findMatches, loadConfig } = require('gitlab-analyzer')
+const { findMatches, fetchFiles, loadConfig } = require('gitlab-analyzer')
 ```
 
-Both resolve to the same public API (`findMatches`, `loadConfig`, types
-`FindMatchesOptions` / `MatchResult`). The CJS variant is emitted as
+Both resolve to the same public API (`findMatches`, `fetchFiles`,
+`loadConfig`, types `FindMatchesOptions` / `MatchResult` /
+`FetchFilesOptions` / `FetchFilesResult` / `FetchedRepo` / `FetchedFile` /
+`SaveFileInput` / `SaveFileResult`). The CJS variant is emitted as
 `dist/index.cjs` and the ESM variant as `dist/index.js`; types resolve via
 the `exports["."].types` field to `dist/index.d.ts`.
 
