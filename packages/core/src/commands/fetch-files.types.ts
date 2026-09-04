@@ -1,21 +1,17 @@
-import type { Readable } from 'node:stream';
 import type { RepoInfo, SearchProjectsItem } from '../types.ts';
 import type { SearchMetrics } from './find-matches.types.ts';
 
-/** Hard cap on embedded file content: files above this are streamed, not embedded (D21). */
-export const MAX_EMBED_BYTES = 10 * 1024 * 1024;
-
 /** Outcome of a single file fetch inside {@link FetchedRepo.files}. */
-export type FetchedFileStatus = 'fetched' | 'binary' | 'failed' | 'large';
+export type FetchedFileStatus = 'fetched' | 'binary' | 'failed';
 
-/** One processed file (all files of a repo end up here: fetched + binary + large + failed). */
+/** One processed file (all files of a repo end up here: fetched + binary + failed). */
 export type FetchedFile = {
   projectId: number;
   repo: string;
   branch: string;
   /** Path in the repo, `/`-separated, WITHOUT the leading slash (tree-API form). */
   path: string;
-  /** null for failed and large (exact size is only known after consuming the stream). */
+  /** null only for `failed` (the blob was never fully read). */
   bytes: number | null;
   status: FetchedFileStatus;
   /** Non-empty only for embedded text (`fetched`). */
@@ -51,11 +47,11 @@ export type SaveFileInput = {
   branch: string;
   /** Path in the repo (tree-API form, no leading slash). */
   path: string;
-  /** Known for fetched/binary (buffer.length); null for large (size unknown until consumed). */
-  bytes: number | null;
-  /** Buffer (≤ MAX_EMBED_BYTES) or a not-yet-consumed stream positioned at byte 0 (large). */
-  data: Buffer | Readable;
-  status: 'fetched' | 'binary' | 'large';
+  /** buffer.length — known for every file that reaches the hook. */
+  bytes: number;
+  /** Full file content (no size cap — deliberate user decision, 2026-09-01). */
+  data: Buffer;
+  status: 'fetched' | 'binary';
 };
 
 export type SaveFileResult = { savedAs: string | null };

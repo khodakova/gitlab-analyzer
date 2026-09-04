@@ -16,26 +16,13 @@ import type {
   SaveFileResult,
 } from './fetch-files.types.ts';
 import type { NamedProject, RepoTiming } from './find-matches.types.ts';
-import { MAX_EMBED_BYTES } from './fetch-files.types.ts';
-export { MAX_EMBED_BYTES };
 
-/**
- * Read a blob stream up to `limit` bytes. If the content exceeds the limit,
- * ALL already-consumed chunks are `unshift`ed back onto the stream (in reverse
- * order) so the consumer gets the FULL content from the beginning, and the
- * same stream is returned. Otherwise the accumulated buffer is returned.
- *
- * Uses explicit `data`/`end`/`error` listeners instead of `for await`:
- * leaving a `for await` loop early invokes the iterator's `return()`,
- * which destroys the stream — the pass-through content would be lost.
- */
-function readBlob(
-  stream: Readable,
-  limit: number,
-): Promise<{ large: false; buffer: Buffer; bytes: number } | { large: true; stream: Readable }> {
+// ponytail: blob читается в память целиком, лимита размера нет (решение пользователя,
+// 2026-09-01); вернуть потолок / стриминговое встраивание, если в репо появятся
+// многогигабайтные lock-файлы.
+function readBlobToBuffer(stream: Readable): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    let size = 0;
     let settled = false;
 
     const cleanup = (): void => {
@@ -45,28 +32,14 @@ function readBlob(
     };
 
     const onData = (raw: Buffer | string): void => {
-      const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-      chunks.push(chunk);
-      size += chunk.length;
-      if (size > limit) {
-        settled = true;
-        cleanup();
-        stream.pause();
-        for (let i = chunks.length - 1; i >= 0; i--) {
-          stream.unshift(chunks[i]);
-        }
-        resolve({ large: true, stream });
-      }
+      chunks.push(Buffer.isBuffer(raw) ? raw : Buffer.from(raw));
     };
-
     const onEnd = (): void => {
       if (settled) return;
       settled = true;
       cleanup();
-      const buffer = Buffer.concat(chunks);
-      resolve({ large: false, buffer, bytes: buffer.length });
+      resolve(Buffer.concat(chunks));
     };
-
     const onError = (err: Error): void => {
       if (settled) return;
       settled = true;
@@ -127,40 +100,28 @@ async function fetchOneFile(
     return { ...base, bytes: null, status: 'failed', content: null, savedAs: null, error: message };
   }
 
-  let read: Awaited<ReturnType<typeof readBlob>>;
+  let buffer: Buffer;
   try {
-    read = await readBlob(stream, MAX_EMBED_BYTES);
+    buffer = await readBlobToBuffer(stream);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn(`Blob read failed: ${project.name}/${entry.path} (${message})`);
     return { ...base, bytes: null, status: 'failed', content: null, savedAs: null, error: message };
   }
 
-  if (read.large) {
-    // Exact size is unknown without consuming the stream — counting is the CLI's job (T7).
-    const input: SaveFileInput = {
-      ...base,
-      bytes: null,
-      data: read.stream,
-      status: 'large',
-    };
-    const { savedAs } = (await saveFile?.(input)) ?? ({ savedAs: null } satisfies SaveFileResult);
-    return { ...base, bytes: null, status: 'large', content: null, savedAs, error: null };
-  }
-
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer);
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
   } catch {
-    logger.warn(`Binary file — saved separately: ${project.name}/${entry.path} (${read.bytes} bytes)`);
-    const input: SaveFileInput = { ...base, bytes: read.bytes, data: read.buffer, status: 'binary' };
+    logger.warn(`Binary file — saved separately: ${project.name}/${entry.path} (${buffer.length} bytes)`);
+    const input: SaveFileInput = { ...base, bytes: buffer.length, data: buffer, status: 'binary' };
     const { savedAs } = (await saveFile?.(input)) ?? ({ savedAs: null } satisfies SaveFileResult);
-    return { ...base, bytes: read.bytes, status: 'binary', content: null, savedAs, error: null };
+    return { ...base, bytes: buffer.length, status: 'binary', content: null, savedAs, error: null };
   }
 
-  const input: SaveFileInput = { ...base, bytes: read.bytes, data: read.buffer, status: 'fetched' };
+  const input: SaveFileInput = { ...base, bytes: buffer.length, data: buffer, status: 'fetched' };
   const { savedAs } = (await saveFile?.(input)) ?? ({ savedAs: null } satisfies SaveFileResult);
-  return { ...base, bytes: read.bytes, status: 'fetched', content: text, savedAs, error: null };
+  return { ...base, bytes: buffer.length, status: 'fetched', content: text, savedAs, error: null };
 }
 
 /** Append one per-repo timing entry to the shared accumulator (RepoTiming-compatible, phases zeroed). */
@@ -280,7 +241,7 @@ async function processRepo(project: NamedProject, opts: FetchFilesOptions, progr
  *
  * The function is pure: no file writes, no `process.exit`. Persistence is the
  * CLI's job — through the `saveFile` hook: core decides WHAT (fetched / binary
- * / large / failed, Buffer vs Readable), the CLI decides WHERE (format,
+ * / failed — data is always a full Buffer), the CLI decides WHERE (format,
  * collisions, unsafe paths). The hook's `savedAs` is written back into each
  * {@link FetchedFile}. `branchExists` is NOT computed here — the CLI derives
  * it from `repo.error`.

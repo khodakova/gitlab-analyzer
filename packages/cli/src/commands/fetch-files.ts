@@ -1,15 +1,12 @@
-import { createWriteStream } from 'node:fs';
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
-import { Transform, Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { green, yellow } from 'colorette';
 import {
   fetchFiles,
   loadConfig,
   logger,
-  MAX_EMBED_BYTES,
   type FetchFilesResult,
+  type FetchedFile,
   type FetchedRepo,
   type RepoInfo,
   type SaveFileInput,
@@ -24,6 +21,7 @@ import {
   resolveFetchFilesOptions,
   type FetchFilesCliOptions,
   type FetchFilesOutputFormat,
+  type OutputFilter,
   type ResolvedFetchFilesOptions,
 } from '../utils/options.ts';
 import { applyApiAccess } from '../utils/api-access.ts';
@@ -59,7 +57,7 @@ export type FetchFilesMetaFile = {
   bytes: number | null;
   storage: 'json' | 'file' | 'ndjson' | null;
   savedAs: string | null;
-  status: 'fetched' | 'binary' | 'failed' | 'large';
+  status: 'fetched' | 'binary' | 'failed';
   error: string | null;
 };
 
@@ -77,20 +75,18 @@ export type FetchFilesMeta = {
 type FileOverride = {
   status?: 'failed';
   error?: string;
-  /** Counted byte total for a consumed large stream (FetchedFile.bytes is null). */
-  bytes?: number;
 };
 
 /**
  * Build the saveFile persistence hook + its state for the run: per-file meta
- * overrides, collision maps, the ndjson index append queue, and a per-project
- * byte accumulator for the metrics file.
+ * overrides, collision maps, and a per-project byte accumulator for the
+ * metrics file. Per-format artifacts are written once after the fetch
+ * (writeResultsJson / writeRepoNdjsonFiles) from in-memory data.
  */
 function createSaveFile(resolved: ResolvedFetchFilesOptions, resultsDir: string): {
   saveFile: (input: SaveFileInput) => Promise<SaveFileResult>;
   overrides: Map<string, FileOverride>;
   bytesByProject: Map<number, number>;
-  flushNdjson: () => Promise<void>;
 } {
   // Keyed `${projectId}:${path}` — unique per repo file.
   const overrides = new Map<string, FileOverride>();
@@ -100,37 +96,18 @@ function createSaveFile(resolved: ResolvedFetchFilesOptions, resultsDir: string)
     bytesByProject.set(input.projectId, (bytesByProject.get(input.projectId) ?? 0) + bytes);
   };
 
-  // json/txt: binary/large go to <resultsDir>/<repo>/<path>; taken names per
+  // Separate files (binary) go to <resultsDir>/<repo>/<path>; taken names per
   // target directory (two repos with the same name can share the subtree root).
   const dirTaken = new Map<string, Set<string>>();
-
-  // ndjson: everything lands flat in resultsDir; reserve the meta/index names
-  // so a repo file can never clobber them.
-  const ndTaken = new Set<string>(['meta.json', 'results.ndjson']);
-  const ndjsonPath = join(resultsDir, 'results.ndjson');
-  let ndQueue = Promise.resolve();
-  const flushNdjson = (): Promise<void> => ndQueue;
-
-  const consumeStreamTo = async (data: Readable, target: string): Promise<number> => {
-    let counted = 0;
-    const counter = new Transform({
-      transform(chunk: Buffer, _enc, cb) {
-        counted += chunk.length;
-        cb(null, chunk);
-      },
-    });
-    await pipeline(data, counter, createWriteStream(target));
-    return counted;
-  };
 
   const markUnsafe = (input: SaveFileInput): void => {
     logger.warn(`${input.repo}/${input.path}: unsafe path — файл не сохранён`);
     overrides.set(keyOf(input), { status: 'failed', error: 'unsafe path' });
   };
 
-  // json/txt: <resultsDir>/<repo>/<path> for binary/large; fetched text is
-  // embedded by the caller (no write here). Returns the '/'-separated
-  // relative savedAs.
+  // Единое правило для всех форматов: бинарник → <resultsDir>/<repo>/<path>.
+  // Fetched text is embedded by the caller (no write here). Returns the
+  // '/'-separated relative savedAs.
   const writeSeparated = async (input: SaveFileInput): Promise<string> => {
     const segments = input.path.split('/');
     const dir = join(resultsDir, input.repo, ...segments.slice(0, -1));
@@ -140,111 +117,56 @@ function createSaveFile(resolved: ResolvedFetchFilesOptions, resultsDir: string)
     taken.add(name);
     const target = join(dir, name);
     await mkdir(dir, { recursive: true });
-
-    let bytes = input.bytes ?? 0;
-    if (input.data instanceof Readable) {
-      bytes = await consumeStreamTo(input.data, target);
-      // FetchedFile.bytes is null for large; meta takes the counted total.
-      overrides.set(keyOf(input), { bytes });
-      logger.warn(
-        `${input.repo}/${input.path}: ${toMb(bytes)} MB > ${MAX_EMBED_BYTES / MB} MB — сохранён на диск, в отчёт не встроен`,
-      );
-    } else {
-      await writeFile(target, input.data);
-      logger.warn(
-        `Binary file — saved separately: ${input.repo}/${input.path} (${bytes} bytes)`,
-      );
-    }
-    addBytes(input, bytes);
+    await writeFile(target, input.data);
+    logger.warn(
+      `Binary file — saved separately: ${input.repo}/${input.path} (${input.bytes} bytes)`,
+    );
+    addBytes(input, input.bytes);
     return [input.repo, ...segments.slice(0, -1), name].join('/');
   };
 
-  // ndjson: every non-failed file (fetched/binary/large) is written flat by
-  // basename, and an index line is appended to results.ndjson.
-  const saveNdjson = async (input: SaveFileInput): Promise<string | null> => {
+  const saveFile = async (input: SaveFileInput): Promise<SaveFileResult> => {
+    // Trust boundary — BEFORE any other branch: an unsafe file is never
+    // embedded nor written, in any format (spec §5).
     if (isUnsafeRepoPath(input.path)) {
       markUnsafe(input);
-      return null;
-    }
-    const base = basename(input.path);
-    const name = withCollisionSuffix(base, ndTaken);
-    if (name !== base) {
-      logger.warn(`Имя "${base}" уже занято — используется ${name} (projectId ${input.projectId})`);
-    }
-    ndTaken.add(name);
-    const target = join(resultsDir, name);
-
-    let bytes = input.bytes ?? 0;
-    if (input.data instanceof Readable) {
-      bytes = await consumeStreamTo(input.data, target);
-      // FetchedFile.bytes is null for large; meta takes the counted total.
-      overrides.set(keyOf(input), { bytes });
-      logger.warn(
-        `${input.repo}/${input.path}: ${toMb(bytes)} MB > ${MAX_EMBED_BYTES / MB} MB — сохранён на диск, в отчёт не встроен`,
-      );
-    } else {
-      await writeFile(target, input.data);
-      if (input.status === 'binary') {
-        logger.warn(
-          `Binary file — saved separately: ${input.repo}/${input.path} (${bytes} bytes)`,
-        );
-      }
-    }
-    addBytes(input, bytes);
-
-    const line = JSON.stringify({
-      projectId: input.projectId,
-      repo: input.repo,
-      branch: input.branch,
-      path: input.path,
-      bytes,
-      savedAs: name,
-    });
-    // Serialized append queue: concurrent saveFile calls never interleave lines.
-    // A failed append is a warning, never fatal (meta still lists the file).
-    ndQueue = ndQueue
-      .then(async () => {
-        await appendFile(ndjsonPath, `${line}\n`, 'utf-8');
-      })
-      .catch((err: unknown) => {
-        logger.warn(
-          `Failed to append to results.ndjson: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
-    return name;
-  };
-
-  const saveFile = async (input: SaveFileInput): Promise<SaveFileResult> => {
-    if (resolved.format === 'ndjson') {
-      return { savedAs: await saveNdjson(input) };
-    }
-    // json/txt: fetched text is embedded in <repo>.json / results.txt later.
-    if (input.status === 'fetched') {
-      addBytes(input, input.bytes ?? 0);
       return { savedAs: null };
     }
-    // Trust boundary: a repo-controlled path could escape resultsDir.
-    if (isUnsafeRepoPath(input.path)) {
-      markUnsafe(input);
+    // Fetched text is embedded in results.json / per-repo .ndjson / results.txt later.
+    if (input.status === 'fetched') {
+      addBytes(input, input.bytes);
       return { savedAs: null };
     }
     return { savedAs: await writeSeparated(input) };
   };
 
-  return { saveFile, overrides, bytesByProject, flushNdjson };
+  return { saveFile, overrides, bytesByProject };
+}
+
+/** Итоговый статус failed: либо core не скачал, либо CLI отказал (unsafe path). */
+function isFileFailed(f: FetchedFile, overrides: Map<string, FileOverride>): boolean {
+  return f.status === 'failed' || overrides.get(`${f.projectId}:${f.path}`)?.status === 'failed';
+}
+
+/** found: хотя бы один не-failed файл; all: каждая репа. */
+function includeRepo(
+  repo: FetchedRepo,
+  overrides: Map<string, FileOverride>,
+  outputFilter: OutputFilter,
+): boolean {
+  if (outputFilter === 'all') return true;
+  return repo.files.some((f) => !isFileFailed(f, overrides));
 }
 
 /**
- * Assign the per-repo `<name>.json` artifact names (collision-suffixed across
- * repos from different groups). Repos that get no artifact (not-found/error)
- * are skipped. `meta.json` is reserved up front.
+ * Раздаёт per-repo имена `<projectName>.ndjson` (коллизии → `-1`, `-2`, …).
+ * `meta.json` зарезервирован.
  */
-function assignJsonNames(result: FetchFilesResult): Map<number, string> {
+function assignNdjsonNames(result: FetchFilesResult): Map<number, string> {
   const taken = new Set<string>(['meta.json']);
   const names = new Map<number, string>();
   for (const repo of result.repos) {
-    if (repo.status === 'not-found' || repo.status === 'error') continue;
-    const base = `${repo.projectName}.json`;
+    const base = `${repo.projectName}.ndjson`;
     const name = withCollisionSuffix(base, taken);
     if (name !== base) {
       logger.warn(`Имя "${base}" уже занято — используется ${name} (projectId ${repo.projectId})`);
@@ -259,7 +181,7 @@ function buildMeta(
   resolved: ResolvedFetchFilesOptions,
   result: FetchFilesResult,
   overrides: Map<string, FileOverride>,
-  jsonNames: Map<number, string> | undefined,
+  ndjsonNames: Map<number, string> | undefined,
 ): { meta: FetchFilesMeta; totalBytes: number } {
   const repos = result.repos.map((r) => {
     // Unsafe files arrive as `fetched` from core; the CLI refused to persist
@@ -287,28 +209,30 @@ function buildMeta(
     r.files.map((f) => {
       const o = overrides.get(`${f.projectId}:${f.path}`);
       const status = o?.status ?? f.status;
-      const bytes = o?.bytes ?? f.bytes;
+      const bytes = f.bytes;
       if (bytes !== null) {
         totalBytes += bytes;
       }
       const storage: FetchFilesMetaFile['storage'] =
         status === 'failed'
           ? null
-          : resolved.format === 'ndjson'
-            ? 'ndjson'
-            : status === 'fetched' && resolved.format === 'json'
+          : status === 'binary'
+            ? 'file'
+            : resolved.format === 'json'
               ? 'json'
-              : 'file';
+              : resolved.format === 'ndjson'
+                ? 'ndjson'
+                : 'file';
       const savedAs: string | null =
         status === 'failed'
           ? null
-          : f.status === 'fetched'
-            ? resolved.format === 'json'
-              ? (jsonNames?.get(f.projectId) ?? null)
+          : status === 'binary'
+            ? f.savedAs
+            : resolved.format === 'json'
+              ? 'results.json'
               : resolved.format === 'txt'
                 ? 'results.txt'
-                : f.savedAs
-            : f.savedAs;
+                : (ndjsonNames?.get(f.projectId) ?? null);
       return {
         projectId: f.projectId,
         repo: f.repo,
@@ -336,42 +260,79 @@ function buildMeta(
   };
 }
 
-/** Write one `<name>.json` artifact per fetchable repo ({repo, projectId, webUrl, branch, files[]}). */
-async function writeRepoJsonFiles(
+/** Один results.json: массив репо с встроенным контентом; failed-файлы не включаются. */
+async function writeResultsJson(
   resultsDir: string,
   result: FetchFilesResult,
   overrides: Map<string, FileOverride>,
-  jsonNames: Map<number, string>,
+  outputFilter: OutputFilter,
+): Promise<void> {
+  const payload = result.repos
+    .filter((r) => includeRepo(r, overrides, outputFilter))
+    .map((r) => ({
+      repo: r.projectName,
+      projectId: r.projectId,
+      webUrl: r.webUrl,
+      branch: r.branch,
+      files: r.files
+        .filter((f) => !isFileFailed(f, overrides))
+        .map((f) => ({
+          path: f.path,
+          bytes: f.bytes,
+          content: f.content,
+          ...(f.status === 'binary' && f.savedAs !== null ? { savedAs: f.savedAs } : {}),
+        })),
+    }));
+  await writeFile(join(resultsDir, 'results.json'), JSON.stringify(payload, null, 2), 'utf-8');
+}
+
+/** По одному `<repo>.ndjson`: автономная строка на файл; binary — content:null + savedAs. */
+async function writeRepoNdjsonFiles(
+  resultsDir: string,
+  result: FetchFilesResult,
+  overrides: Map<string, FileOverride>,
+  ndjsonNames: Map<number, string>,
+  outputFilter: OutputFilter,
 ): Promise<void> {
   for (const repo of result.repos) {
-    const name = jsonNames.get(repo.projectId);
-    if (name === undefined) {
-      continue; // not-found / error repos get no artifact
-    }
-    const payload = {
-      repo: repo.projectName,
-      projectId: repo.projectId,
-      webUrl: repo.webUrl,
-      branch: repo.branch,
-      files: repo.files.map((f) => ({
-        path: f.path,
-        bytes: overrides.get(`${f.projectId}:${f.path}`)?.bytes ?? f.bytes,
-        content: f.content,
-      })),
-    };
-    await writeFile(join(resultsDir, name), JSON.stringify(payload, null, 2), 'utf-8');
+    if (!includeRepo(repo, overrides, outputFilter)) continue;
+    const lines = repo.files
+      .filter((f) => !isFileFailed(f, overrides))
+      .map((f) =>
+        JSON.stringify({
+          projectId: f.projectId,
+          repo: f.repo,
+          branch: f.branch,
+          path: f.path,
+          bytes: f.bytes,
+          ...(f.status === 'binary'
+            ? { content: null, savedAs: f.savedAs }
+            : { content: f.content }),
+        }),
+      );
+    await writeFile(
+      join(resultsDir, ndjsonNames.get(repo.projectId) ?? `${repo.projectName}.ndjson`),
+      lines.length > 0 ? `${lines.join('\n')}\n` : '',
+      'utf-8',
+    );
   }
 }
-function renderResultsTxt(result: FetchFilesResult): string {
+function renderResultsTxt(
+  result: FetchFilesResult,
+  overrides: Map<string, FileOverride>,
+  outputFilter: OutputFilter,
+): string {
   const lines: string[] = [];
   for (const repo of result.repos) {
-    // Error/not-found repos have no files — no txt section for them (spec §5.4).
-    if (repo.files.length === 0) continue;
+    if (!includeRepo(repo, overrides, outputFilter)) continue;
     lines.push(`---- ${repo.projectName} (id: ${repo.projectId}) ----`);
     if (repo.webUrl !== null) {
       lines.push(`URL: ${repo.webUrl}`);
     }
     for (const f of repo.files) {
+      // core-failed файлы остаются с плейсхолдером (спека §4); unsafe-refused
+      // (overrides failed) полностью пропускаются — файл не существует на диске.
+      if (overrides.get(`${f.projectId}:${f.path}`)?.status === 'failed') continue;
       lines.push('');
       lines.push(f.bytes !== null ? `path: ${f.path} (${f.bytes} bytes)` : `path: ${f.path}`);
       if (f.status === 'fetched') {
@@ -380,8 +341,6 @@ function renderResultsTxt(result: FetchFilesResult): string {
         }
       } else if (f.status === 'binary') {
         lines.push(`[бинарный файл, сохранён отдельно: ${f.repo}/${f.path}]`);
-      } else if (f.status === 'large') {
-        lines.push(`[файл > ${MAX_EMBED_BYTES / MB} МБ, сохранён отдельно: ${f.repo}/${f.path}]`);
       } else {
         lines.push(`[файл не скачан: ${f.error ?? 'unknown error'}]`);
       }
@@ -609,8 +568,7 @@ export async function runFetchFiles(
     : `fetch-files-results-${timestampDirName(startedAt)}`;
   await mkdir(resultsDir, { recursive: true });
 
-  const { saveFile, overrides, bytesByProject: bytes, flushNdjson } =
-    createSaveFile(resolved, resultsDir);
+  const { saveFile, overrides, bytesByProject: bytes } = createSaveFile(resolved, resultsDir);
   bytesByProject = bytes;
 
   const result = await runFetchWithProgress(
@@ -636,18 +594,29 @@ export async function runFetchFiles(
     }
   }
 
-  const jsonNames = resolved.format === 'json' ? assignJsonNames(result) : undefined;
-  const { meta, totalBytes } = buildMeta(resolved, result, overrides, jsonNames);
+  const ndjsonNames = resolved.format === 'ndjson' ? assignNdjsonNames(result) : undefined;
+  const { meta, totalBytes } = buildMeta(resolved, result, overrides, ndjsonNames);
   await writeFile(join(resultsDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8');
 
   if (resolved.format === 'json') {
-    await writeRepoJsonFiles(resultsDir, result, overrides, jsonNames ?? new Map());
+    await writeResultsJson(resultsDir, result, overrides, resolved.outputFilter);
+  }
+  if (resolved.format === 'ndjson') {
+    await writeRepoNdjsonFiles(
+      resultsDir,
+      result,
+      overrides,
+      ndjsonNames ?? new Map(),
+      resolved.outputFilter,
+    );
   }
   if (resolved.format === 'txt') {
-    await writeFile(join(resultsDir, 'results.txt'), renderResultsTxt(result), 'utf-8');
+    await writeFile(
+      join(resultsDir, 'results.txt'),
+      renderResultsTxt(result, overrides, resolved.outputFilter),
+      'utf-8',
+    );
   }
-  // ndjson index lines were appended (serialized) during saveFile — drain.
-  await flushNdjson();
 
   const totalFiles = meta.files.length;
   progress.static(''); // separator between the fetch and the summary

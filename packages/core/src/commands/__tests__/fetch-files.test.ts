@@ -25,7 +25,7 @@ vi.mock('../../utils/get-projects.ts', () => ({
   getAllProjects: getAllProjectsMock,
 }));
 
-import { fetchFiles, MAX_EMBED_BYTES } from '../fetch-files.ts';
+import { fetchFiles } from '../fetch-files.ts';
 import { compileMatcher } from '../find-matches.ts';
 import type { FetchFilesResult, SaveFileInput } from '../fetch-files.types.ts';
 import type { SearchMetrics } from '../find-matches.types.ts';
@@ -98,8 +98,40 @@ describe('fetchFiles', () => {
     warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
   });
 
-  it('exports MAX_EMBED_BYTES = 10 MiB', () => {
-    expect(MAX_EMBED_BYTES).toBe(10 * 1024 * 1024);
+  it('large text file: read fully, embedded as fetched with complete content', async () => {
+    const MB = 1024 * 1024;
+    const full = Buffer.concat([
+      Buffer.alloc(5 * MB, 0x61),
+      Buffer.alloc(5 * MB, 0x62),
+      Buffer.alloc(1 * MB, 0x63),
+    ]);
+    getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+    listRepoTreeRecursiveMock.mockResolvedValue({ entries: [blob('big/dump.txt')], truncated: false });
+    fetchBlobRawMock.mockResolvedValue(Readable.from([full.subarray(0, 5 * MB), full.subarray(5 * MB)]));
+
+    const saveInputs: SaveFileInput[] = [];
+    const result = await fetchFiles({
+      patterns: ['**/*'],
+      branch: 'main',
+      saveFile: async (input) => {
+        saveInputs.push(input);
+        return { savedAs: 'big.txt' };
+      },
+    });
+
+    expect(saveInputs).toHaveLength(1);
+    expect(saveInputs[0]).toMatchObject({ status: 'fetched', bytes: full.length, path: 'big/dump.txt' });
+    expect(saveInputs[0].data).toBeInstanceOf(Buffer);
+    expect((saveInputs[0].data as Buffer).equals(full)).toBe(true);
+
+    expect(result.repos[0].status).toBe('fetched');
+    expect(result.repos[0].files[0]).toMatchObject({
+      status: 'fetched',
+      content: full.toString('utf-8'),
+      bytes: full.length,
+      savedAs: 'big.txt',
+      error: null,
+    });
   });
 
   it('success: fetches matching blobs, skips non-matching tree entries', async () => {
@@ -196,48 +228,6 @@ describe('fetchFiles', () => {
     expect(saveFile).toHaveBeenCalledTimes(1);
     expect(saveFile.mock.calls[0][0]).toMatchObject({ status: 'binary', bytes: 2 });
     expect(saveFile.mock.calls[0][0].data).toBeInstanceOf(Buffer);
-  });
-
-  it('large: stream exceeding MAX_EMBED_BYTES -> content null, saveFile gets Readable with FULL content from the beginning', async () => {
-    const MB = 1024 * 1024;
-    const c1 = Buffer.alloc(5 * MB, 0x61);
-    const c2 = Buffer.alloc(5 * MB, 0x62);
-    const c3 = Buffer.alloc(1 * MB, 0x63);
-    const full = Buffer.concat([c1, c2, c3]);
-    getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
-    listRepoTreeRecursiveMock.mockResolvedValue({ entries: [blob('big/dump.bin')], truncated: false });
-    fetchBlobRawMock.mockResolvedValue(Readable.from([c1, c2, c3]));
-
-    const saveInputs: SaveFileInput[] = [];
-    const result = await fetchFiles({
-      patterns: ['**/*'],
-      branch: 'main',
-      saveFile: async (input) => {
-        saveInputs.push(input);
-        return { savedAs: 'big.bin' };
-      },
-    });
-
-    expect(saveInputs).toHaveLength(1);
-    expect(saveInputs[0]).toMatchObject({ status: 'large', bytes: null, path: 'big/dump.bin' });
-    expect(saveInputs[0].data).toBeInstanceOf(Readable);
-
-    // The pass-through stream must yield the FULL content from the start,
-    // including every byte consumed before the limit was hit.
-    const chunks: Buffer[] = [];
-    for await (const c of saveInputs[0].data as Readable) {
-      chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c as Uint8Array));
-    }
-    expect(Buffer.concat(chunks).equals(full)).toBe(true);
-
-    expect(result.repos[0].status).toBe('fetched');
-    expect(result.repos[0].files[0]).toMatchObject({
-      status: 'large',
-      content: null,
-      bytes: null,
-      savedAs: 'big.bin',
-      error: null,
-    });
   });
 
   it('tree 404 -> repo error, zero blob requests, onProgress carries the error', async () => {

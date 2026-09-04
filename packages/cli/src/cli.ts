@@ -191,7 +191,13 @@ export function buildProgram(): Command {
     .option('-b, --branch <name>', 'Branch to fetch files from')
     .option('--file-exclude <list>', 'Comma-separated glob patterns; matching files are skipped (wins over positional patterns)', parseCommaList)
     .option('-o, --output <dir>', 'Directory to create the results folder in; omit to use cwd')
-    .addOption(new Option('--format <json|ndjson|txt>', 'Output layout (default json: one <repo>.json per repo).').choices(['json', 'ndjson', 'txt']))
+    .addOption(new Option('--format <json|ndjson|txt>', 'Output layout (default json: one results.json with all repos).').choices(['json', 'ndjson', 'txt']))
+    .addOption(
+      new Option(
+        '--output-filter <found|all>',
+        'Which repositories get artifacts: found = only repos with files (default), all = every scanned repo.',
+      ).choices(['found', 'all']),
+    )
     .option('-c, --concurrency <n>', 'Max parallel repo fetches', (val: string) => parseInt(val, 10))
     .option('--interactive', 'Pick repos manually before fetching')
     .option('--enable-logs', 'Enable debug/API logging (also enabled automatically with --interactive)')

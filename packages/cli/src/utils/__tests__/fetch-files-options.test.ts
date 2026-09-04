@@ -522,6 +522,24 @@ describe('resolveFetchFilesOptions (precedence: CLI > env > config > default)', 
     });
   });
 
+  describe('outputFilter (CLI-only, default "found")', () => {
+    it('defaults to found', () => {
+      const res = resolveFetchFilesOptions(['**/*.ts'], {}, emptyConfig() as never);
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('found');
+    });
+
+    it('honors --output-filter all from CLI', () => {
+      const res = resolveFetchFilesOptions(
+        ['**/*.ts'],
+        { outputFilter: 'all' },
+        emptyConfig() as never,
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.resolved.outputFilter).toBe('all');
+    });
+  });
+
   describe('output & metricsFile (CLI flag only)', () => {
     it('output resolves from the CLI flag', () => {
       const res = resolveFetchFilesOptions(

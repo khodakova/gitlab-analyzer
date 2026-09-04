@@ -47,7 +47,7 @@ export type {
   MatchResult,
   FileFilters,
 } from './commands/find-matches.types.ts';
-export { fetchFiles, MAX_EMBED_BYTES } from './commands/fetch-files.ts';
+export { fetchFiles } from './commands/fetch-files.ts';
 export type {
   FetchFilesOptions,
   FetchFilesResult,

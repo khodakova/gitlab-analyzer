@@ -10,8 +10,8 @@
   branch, and glob-based file include/exclude.
 - **`gitlab-analyzer fetch-files <patterns...>`** — download every file
   matching the given glob patterns from all reachable projects: text files
-  are embedded as UTF-8 in the report, binary and oversized files are handed
-  to a `saveFile` hook for streaming. See the
+  of any size are embedded as UTF-8 in the report, binary files are handed
+  to a `saveFile` hook for separate storage. See the
   [CLI package README](../cli/README.md) for the full flag reference.
 - **Programmatic API** — `import { findMatches, fetchFiles, loadConfig } from 'gitlab-analyzer'`
   for custom post-processing pipelines.
@@ -452,8 +452,6 @@ to you via the `saveFile` hook:
 
 ```ts
 import { writeFile, mkdir } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
-import { pipeline } from 'node:stream/promises';
 import {
   fetchFiles,
   loadConfig,
@@ -471,11 +469,7 @@ const result = await fetchFiles({
     const dir = `./fetched/${input.repo}`;
     await mkdir(dir, { recursive: true });
     const dest = `${dir}/${input.path.replace(/\//g, '__')}`;
-    if (input.data instanceof Buffer) {
-      await writeFile(dest, input.data);
-    } else {
-      await pipeline(input.data, createWriteStream(dest));
-    }
+    await writeFile(dest, input.data); // data is always a full Buffer
     return { savedAs: dest };
   },
   onProgress: (done, total, currentRepo, error) => {
@@ -495,23 +489,21 @@ Key contract points:
 
 - **No disk writes without `saveFile`.** `fetchFiles` itself never writes
   files and never calls `process.exit` — the `saveFile` hook is the only
-  write path. Core decides **what** each file is (`status` plus a `Buffer`
-  or a `Readable` in `data`); the hook decides **where** (naming, path
-  safety, collision handling). Files with status `failed` never reach the
-  hook. The `savedAs` you return (or `null`) is written back into the
+  write path. Core decides **what** each file is (`status` plus the full
+  file content as a `Buffer` in `data`); the hook decides **where** (naming,
+  path safety, collision handling). Files with status `failed` never reach
+  the hook. The `savedAs` you return (or `null`) is written back into the
   matching `FetchedFile`.
-- **`MAX_EMBED_BYTES` (10 MB).** Files at or below 10 MB are buffered and
-  passed to `saveFile` as a `Buffer` — as UTF-8-validated `content` with
-  status `fetched`, or as status `binary` (non-UTF-8) with `content: null`.
-  Files above 10 MB get status `large` and `data` is a not-yet-consumed
-  stream positioned at byte 0 — pipe it somewhere or it is lost (`bytes`
-  is `null` there, since the size is only known after consuming the
-  stream).
+- **No size cap.** Every blob is read fully into a `Buffer` and passed to
+  `saveFile` — as UTF-8-validated `content` with status `fetched` (text of
+  any size), or as status `binary` (non-UTF-8) with `content: null`. There
+  is no streaming/large branch anymore: `data` is always a `Buffer` and
+  `bytes` is always its length.
 - **Return shape.** `{ repos: FetchedRepo[] }` — one entry per repo with
   `status` (`fetched` / `not-found` / `partial` / `error`), counters
   (`filesTotal` / `filesFetched` / `filesFailed`), `truncated`, `error`,
   and a `files` array where every processed file lands with its own
-  `status` (`fetched` / `binary` / `failed` / `large`), `content` (embedded
+  `status` (`fetched` / `binary` / `failed`), `content` (embedded
   text only), `savedAs` and `error`. Unlike the CLI report, the library
   result has no `branchExists` field — the CLI derives it from `error`.
 - All types (`FetchFilesOptions`, `FetchFilesResult`, `FetchedRepo`,
@@ -545,10 +537,9 @@ type MatchResult = {
 
 `fetchFiles` returns `{ repos: FetchedRepo[] }` — one entry per repo whose
 file list was retrieved (including repos with zero matching files and repos
-that failed mid-walk; those carry `error`). Files above `MAX_EMBED_BYTES`
-(10 MB) are never embedded — text content is only embedded for UTF-8 files
-at or below the cap (`FetchedFile.content`); binary and oversized files are
-handed to the `saveFile` hook instead.
+that failed mid-walk; those carry `error`). Text content is embedded for
+every UTF-8 file regardless of size (`FetchedFile.content`); binary files
+are handed to the `saveFile` hook instead.
 
 ```ts
 type FetchedRepo = {
@@ -567,8 +558,8 @@ type FetchedRepo = {
     repo: string;
     branch: string;
     path: string;              // repo-relative, no leading slash
-    bytes: number | null;      // null for failed and large
-    status: 'fetched' | 'binary' | 'failed' | 'large';
+    bytes: number | null;      // null only for failed
+    status: 'fetched' | 'binary' | 'failed';
     content: string | null;    // embedded text only (status 'fetched')
     savedAs: string | null;    // from the saveFile hook
     error: string | null;
@@ -740,7 +731,7 @@ const { findMatches, fetchFiles, loadConfig } = require('gitlab-analyzer')
 ```
 
 Both resolve to the same public API (`findMatches`, `fetchFiles`,
-`MAX_EMBED_BYTES`, `loadConfig`, types `FindMatchesOptions` / `MatchResult` /
+`loadConfig`, types `FindMatchesOptions` / `MatchResult` /
 `FetchFilesOptions` / `FetchFilesResult` / `FetchedRepo` / `FetchedFile` /
 `SaveFileInput` / `SaveFileResult`). The CJS variant is emitted as
 `dist/index.cjs` and the ESM variant as `dist/index.js`; types resolve via

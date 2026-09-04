@@ -3,7 +3,6 @@ import { mkdtemp, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import type {
   FetchFilesOptions,
   FetchedFile,
@@ -55,7 +54,6 @@ const collectWriteCalls = (spy: ReturnType<typeof vi.spyOn>): string =>
 type FileSpec =
   | { path: string; status: 'fetched'; content: string }
   | { path: string; status: 'binary'; data: Buffer }
-  | { path: string; status: 'large'; streamBytes: number }
   | { path: string; status: 'failed'; error: string };
 
 type RepoSpec = {
@@ -117,18 +115,9 @@ function mockRepos(specs: RepoSpec[]): void {
           });
           continue;
         }
-        const data: Buffer | Readable =
-          f.status === 'large'
-            ? Readable.from([Buffer.alloc(f.streamBytes)])
-            : f.status === 'binary'
-              ? f.data
-              : Buffer.from(f.content, 'utf-8');
-        const bytes: number | null =
-          f.status === 'large'
-            ? null
-            : f.status === 'binary'
-              ? f.data.length
-              : Buffer.byteLength(f.content, 'utf-8');
+        const data: Buffer = f.status === 'binary' ? f.data : Buffer.from(f.content, 'utf-8');
+        const bytes: number =
+          f.status === 'binary' ? f.data.length : Buffer.byteLength(f.content, 'utf-8');
         const saveFile = opts.saveFile;
         if (!saveFile) {
           throw new Error('fetch-files must pass a saveFile hook');
@@ -200,7 +189,7 @@ describe('runFetchFiles (exported helper)', () => {
     await rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
-  it('json: one repo → one <repo>.json + meta.json with the full meta shape', async () => {
+  it('json: one results.json with all repos + meta.json with the full meta shape', async () => {
     mockRepos([
       {
         projectId: 1,
@@ -219,16 +208,21 @@ describe('runFetchFiles (exported helper)', () => {
       expect.objectContaining({ patterns: ['**/*.ts'] }),
     );
 
-    const repoJson = JSON.parse(
-      await readFile(path.join(resultsDir, 'alpha.json'), 'utf-8'),
+    const listing = await readdir(resultsDir);
+    expect(listing.sort()).toEqual(['meta.json', 'results.json']);
+
+    const report = JSON.parse(
+      await readFile(path.join(resultsDir, 'results.json'), 'utf-8'),
     );
-    expect(repoJson).toEqual({
-      repo: 'alpha',
-      projectId: 1,
-      webUrl: 'https://gitlab.example.com/alpha',
-      branch: 'develop',
-      files: [{ path: 'src/a.ts', bytes: 5, content: 'hello' }],
-    });
+    expect(report).toEqual([
+      {
+        repo: 'alpha',
+        projectId: 1,
+        webUrl: 'https://gitlab.example.com/alpha',
+        branch: 'develop',
+        files: [{ path: 'src/a.ts', bytes: 5, content: 'hello' }],
+      },
+    ]);
 
     const meta = JSON.parse(
       await readFile(path.join(resultsDir, 'meta.json'), 'utf-8'),
@@ -285,45 +279,13 @@ describe('runFetchFiles (exported helper)', () => {
       path: 'src/a.ts',
       bytes: 5,
       storage: 'json',
-      savedAs: 'alpha.json',
+      savedAs: 'results.json',
       status: 'fetched',
       error: null,
     });
   });
 
-  it('json: repo-name collision → alpha.json + alpha-1.json + warn', async () => {
-    mocks.getAllProjects.mockResolvedValue([
-      { id: 1, name: 'alpha', description: null },
-      { id: 2, name: 'alpha', description: null },
-    ]);
-    mockRepos([
-      {
-        projectId: 1,
-        projectName: 'alpha',
-        files: [{ path: 'a.ts', status: 'fetched', content: 'one' }],
-      },
-      {
-        projectId: 2,
-        projectName: 'alpha',
-        files: [{ path: 'a.ts', status: 'fetched', content: 'two' }],
-      },
-    ]);
-
-    const { resultsDir } = await runFetchFiles(['**/*.ts'], { output: tmpDir });
-
-    expect(existsSync(path.join(resultsDir, 'alpha.json'))).toBe(true);
-    expect(existsSync(path.join(resultsDir, 'alpha-1.json'))).toBe(true);
-    expect(collectWriteCalls(stderrSpy)).toContain('alpha-1.json');
-    expect(collectWriteCalls(stderrSpy)).toContain('уже занято');
-
-    const meta = JSON.parse(
-      await readFile(path.join(resultsDir, 'meta.json'), 'utf-8'),
-    );
-    expect(meta.files[0].savedAs).toBe('alpha.json');
-    expect(meta.files[1].savedAs).toBe('alpha-1.json');
-  });
-
-  it('json: not-found repo → no json file for it, but meta has its repo entry', async () => {
+  it('json: not-found repo is absent from results.json under found, present with files:[] under all', async () => {
     mockRepos([
       {
         projectId: 1,
@@ -333,12 +295,14 @@ describe('runFetchFiles (exported helper)', () => {
       { projectId: 2, projectName: 'beta', status: 'not-found', files: [] },
     ]);
 
-    const { resultsDir } = await runFetchFiles(['**/*.ts'], { output: tmpDir });
-
-    expect(existsSync(path.join(resultsDir, 'alpha.json'))).toBe(true);
-    expect(existsSync(path.join(resultsDir, 'beta.json'))).toBe(false);
+    const found = await runFetchFiles(['**/*.ts'], { output: tmpDir, format: 'json' });
+    let report = JSON.parse(
+      await readFile(path.join(found.resultsDir, 'results.json'), 'utf-8'),
+    );
+    expect(report).toHaveLength(1);
+    expect(report[0].repo).toBe('alpha');
     const meta = JSON.parse(
-      await readFile(path.join(resultsDir, 'meta.json'), 'utf-8'),
+      await readFile(path.join(found.resultsDir, 'meta.json'), 'utf-8'),
     );
     expect(meta.repos).toHaveLength(2);
     expect(meta.repos[1]).toEqual({
@@ -354,9 +318,26 @@ describe('runFetchFiles (exported helper)', () => {
       error: null,
     });
     expect(meta.files).toHaveLength(1);
+
+    const all = await runFetchFiles(['**/*.ts'], {
+      output: tmpDir,
+      format: 'json',
+      outputFilter: 'all',
+    });
+    report = JSON.parse(
+      await readFile(path.join(all.resultsDir, 'results.json'), 'utf-8'),
+    );
+    expect(report).toHaveLength(2);
+    expect(report[1]).toEqual({
+      repo: 'beta',
+      projectId: 2,
+      webUrl: null,
+      branch: 'develop',
+      files: [],
+    });
   });
 
-  it('json: binary file → <repo>/<path> on disk, content: null in json + warn', async () => {
+  it('json: binary file → <repo>/<path> on disk, content: null + savedAs in results.json + warn', async () => {
     mockRepos([
       {
         projectId: 1,
@@ -376,11 +357,12 @@ describe('runFetchFiles (exported helper)', () => {
     expect(await readFile(binaryPath)).toEqual(Buffer.from([1, 2, 3]));
     expect(collectWriteCalls(stderrSpy)).toContain('Binary file — saved separately');
 
-    const repoJson = JSON.parse(
-      await readFile(path.join(resultsDir, 'alpha.json'), 'utf-8'),
+    const report = JSON.parse(
+      await readFile(path.join(resultsDir, 'results.json'), 'utf-8'),
     );
-    expect(repoJson.files).toEqual([
-      { path: 'assets/logo.png', bytes: 3, content: null },
+    expect(report).toHaveLength(1);
+    expect(report[0].files).toEqual([
+      { path: 'assets/logo.png', bytes: 3, content: null, savedAs: 'alpha/assets/logo.png' },
       { path: 'src/a.ts', bytes: 2, content: 'hi' },
     ]);
 
@@ -398,80 +380,99 @@ describe('runFetchFiles (exported helper)', () => {
       path: 'src/a.ts',
       status: 'fetched',
       storage: 'json',
-      savedAs: 'alpha.json',
+      savedAs: 'results.json',
     });
   });
 
-  it('ndjson: basename collisions → package-lock.json + package-lock-1.json + index lines without webUrl', async () => {
+  it('ndjson: one <projectName>.ndjson per repo, self-contained lines, no results.ndjson', async () => {
     mocks.getAllProjects.mockResolvedValue([
       { id: 1, name: 'alpha', description: null },
-      { id: 2, name: 'beta', description: null },
+      { id: 2, name: 'alpha', description: null },
     ]);
     mockRepos([
       {
         projectId: 1,
         projectName: 'alpha',
-        webUrl: 'https://gitlab.example.com/alpha',
         files: [
-          { path: 'pkg/package-lock.json', status: 'fetched', content: '{"a":1}' },
+          { path: 'pkg.json', status: 'fetched', content: '{"n":1}' },
+          { path: 'img/logo.png', status: 'binary', data: Buffer.from([0x00]) },
         ],
       },
       {
         projectId: 2,
-        projectName: 'beta',
-        webUrl: 'https://gitlab.example.com/beta',
-        files: [{ path: 'package-lock.json', status: 'fetched', content: '{"b":2}' }],
+        projectName: 'alpha',
+        files: [{ path: 'pkg.json', status: 'fetched', content: '{"n":2}' }],
       },
     ]);
 
-    const { resultsDir } = await runFetchFiles(['**/package-lock.json'], {
+    const { resultsDir } = await runFetchFiles(['**/*'], {
       output: tmpDir,
       format: 'ndjson',
     });
 
-    expect(existsSync(path.join(resultsDir, 'package-lock.json'))).toBe(true);
-    expect(existsSync(path.join(resultsDir, 'package-lock-1.json'))).toBe(true);
-    expect(
-      await readFile(path.join(resultsDir, 'package-lock.json'), 'utf-8'),
-    ).toBe('{"a":1}');
-    expect(
-      await readFile(path.join(resultsDir, 'package-lock-1.json'), 'utf-8'),
-    ).toBe('{"b":2}');
-    expect(collectWriteCalls(stderrSpy)).toContain('package-lock-1.json');
+    const listing = await readdir(resultsDir);
+    // 'alpha' — каталог отдельного бинарника (единое правило <repo>/<path>, спека §5)
+    expect(listing.sort()).toEqual(['alpha', 'alpha-1.ndjson', 'alpha.ndjson', 'meta.json']);
+    expect(listing).not.toContain('results.ndjson');
+    expect(collectWriteCalls(stderrSpy)).toContain('уже занято');
 
-    const ndjsonRaw = await readFile(path.join(resultsDir, 'results.ndjson'), 'utf-8');
-    expect(ndjsonRaw).not.toContain('webUrl');
-    const lines = ndjsonRaw
-      .split('\n')
-      .filter((l) => l.length > 0)
-      .map((l) => JSON.parse(l) as Record<string, unknown>);
-    expect(lines).toHaveLength(2);
-    expect(Object.keys(lines[0]).sort()).toEqual(
-      ['projectId', 'repo', 'branch', 'path', 'bytes', 'savedAs'].sort(),
-    );
-    expect(lines[0]).toMatchObject({
+    const firstLines = (await readFile(path.join(resultsDir, 'alpha.ndjson'), 'utf-8'))
+      .trim()
+      .split('\n');
+    expect(JSON.parse(firstLines[0])).toEqual({
       projectId: 1,
       repo: 'alpha',
       branch: 'develop',
-      path: 'pkg/package-lock.json',
+      path: 'pkg.json',
       bytes: 7,
-      savedAs: 'package-lock.json',
+      content: '{"n":1}',
     });
-    expect(lines[1]).toMatchObject({
-      projectId: 2,
-      repo: 'beta',
+    // binary line carries savedAs, content null (same repo, second line)
+    expect(JSON.parse(firstLines[1])).toEqual({
+      projectId: 1,
+      repo: 'alpha',
       branch: 'develop',
-      path: 'package-lock.json',
+      path: 'img/logo.png',
+      bytes: 1,
+      content: null,
+      savedAs: 'alpha/img/logo.png',
+    });
+    // second repo's file in the collision-suffixed file
+    const second = JSON.parse(
+      await readFile(path.join(resultsDir, 'alpha-1.ndjson'), 'utf-8'),
+    );
+    expect(second).toEqual({
+      projectId: 2,
+      repo: 'alpha',
+      branch: 'develop',
+      path: 'pkg.json',
       bytes: 7,
-      savedAs: 'package-lock-1.json',
+      content: '{"n":2}',
     });
 
     const meta = JSON.parse(
       await readFile(path.join(resultsDir, 'meta.json'), 'utf-8'),
     );
     expect(meta.format).toBe('ndjson');
-    expect(meta.files[0]).toMatchObject({ storage: 'ndjson', savedAs: 'package-lock.json' });
-    expect(meta.files[1]).toMatchObject({ storage: 'ndjson', savedAs: 'package-lock-1.json' });
+    expect(meta.files[0]).toMatchObject({ storage: 'ndjson', savedAs: 'alpha.ndjson' });
+    expect(meta.files[1]).toMatchObject({ storage: 'file', savedAs: 'alpha/img/logo.png' });
+    expect(meta.files[2]).toMatchObject({ storage: 'ndjson', savedAs: 'alpha-1.ndjson' });
+  });
+
+  it('ndjson: output-filter all writes an empty file for a zero-file repo', async () => {
+    mockRepos([
+      { projectId: 3, projectName: 'empty-repo', status: 'not-found', files: [] },
+    ]);
+
+    const { resultsDir } = await runFetchFiles(['**/*'], {
+      output: tmpDir,
+      format: 'ndjson',
+      outputFilter: 'all',
+    });
+
+    const listing = await readdir(resultsDir);
+    expect(listing).toContain('empty-repo.ndjson');
+    expect(await readFile(path.join(resultsDir, 'empty-repo.ndjson'), 'utf-8')).toBe('');
   });
 
   it('ndjson: unsafe path → no file written, meta failed/"unsafe path", repo partial in meta', async () => {
@@ -488,9 +489,8 @@ describe('runFetchFiles (exported helper)', () => {
       format: 'ndjson',
     });
 
-    expect(existsSync(path.join(resultsDir, 'evil.ts'))).toBe(false);
     const listing = await readdir(resultsDir);
-    expect(listing).not.toContain('evil.ts');
+    expect(listing).toEqual(['meta.json']); // found: zero non-failed files → no artifact
     expect(collectWriteCalls(stderrSpy)).toContain('unsafe path');
 
     const meta = JSON.parse(
@@ -506,7 +506,7 @@ describe('runFetchFiles (exported helper)', () => {
     expect(meta.repos[0].status).toBe('partial');
   });
 
-  it('txt: embedded content + binary/large/failed placeholder lines', async () => {
+  it('txt: embedded content + binary/failed placeholder lines', async () => {
     mockRepos([
       {
         projectId: 1,
@@ -515,7 +515,6 @@ describe('runFetchFiles (exported helper)', () => {
         files: [
           { path: 'src/a.ts', status: 'fetched', content: 'console.log(1)' },
           { path: 'img.bin', status: 'binary', data: Buffer.from([9, 9]) },
-          { path: 'big.bin', status: 'large', streamBytes: 2048 },
           { path: 'gone.ts', status: 'failed', error: 'boom' },
         ],
       },
@@ -532,13 +531,9 @@ describe('runFetchFiles (exported helper)', () => {
     expect(txt).toContain('path: src/a.ts (14 bytes)');
     expect(txt).toContain('console.log(1)');
     expect(txt).toContain('[бинарный файл, сохранён отдельно: alpha/img.bin]');
-    expect(txt).toContain('[файл > 10 МБ, сохранён отдельно: alpha/big.bin]');
     expect(txt).toContain('[файл не скачан: boom]');
 
     expect(existsSync(path.join(resultsDir, 'alpha', 'img.bin'))).toBe(true);
-    const bigPath = path.join(resultsDir, 'alpha', 'big.bin');
-    expect(existsSync(bigPath)).toBe(true);
-    expect((await readFile(bigPath)).length).toBe(2048);
 
     const meta = JSON.parse(
       await readFile(path.join(resultsDir, 'meta.json'), 'utf-8'),
@@ -555,12 +550,6 @@ describe('runFetchFiles (exported helper)', () => {
       savedAs: 'alpha/img.bin',
     });
     expect(meta.files[2]).toMatchObject({
-      status: 'large',
-      storage: 'file',
-      savedAs: 'alpha/big.bin',
-      bytes: 2048,
-    });
-    expect(meta.files[3]).toMatchObject({
       status: 'failed',
       storage: null,
       savedAs: null,
@@ -602,33 +591,29 @@ describe('runFetchFiles (exported helper)', () => {
     expect(txt).not.toContain('gamma');
   });
 
-  it('large: stream consumed, bytes counted, warn with MB, meta bytes not null', async () => {
-    const streamBytes = 5 * 1024 * 1024;
+  it('txt: output-filter all renders header-only sections for zero-file repos', async () => {
     mockRepos([
       {
         projectId: 1,
         projectName: 'alpha',
-        files: [{ path: 'big.bin', status: 'large', streamBytes }],
+        webUrl: 'https://gitlab.example.com/alpha',
+        files: [{ path: 'a.txt', status: 'fetched', content: 'hi' }],
       },
+      { projectId: 2, projectName: 'beta', status: 'not-found', files: [] },
     ]);
 
-    const { resultsDir } = await runFetchFiles(['**/*'], { output: tmpDir });
+    const { resultsDir } = await runFetchFiles(['**/*'], {
+      output: tmpDir,
+      format: 'txt',
+      outputFilter: 'all',
+    });
 
-    const meta = JSON.parse(
-      await readFile(path.join(resultsDir, 'meta.json'), 'utf-8'),
-    );
-    expect(meta.files[0].bytes).toBe(streamBytes);
-    expect(meta.files[0].status).toBe('large');
-    expect(meta.files[0].storage).toBe('file');
-    expect(meta.files[0].savedAs).toBe('alpha/big.bin');
-    expect(collectWriteCalls(stderrSpy)).toContain('5.0 MB > 10 MB');
-    expect(collectWriteCalls(stderrSpy)).toContain(
-      'сохранён на диск, в отчёт не встроен',
-    );
-
-    const bigPath = path.join(resultsDir, 'alpha', 'big.bin');
-    expect(existsSync(bigPath)).toBe(true);
-    expect((await readFile(bigPath)).length).toBe(streamBytes);
+    const txt = await readFile(path.join(resultsDir, 'results.txt'), 'utf-8');
+    expect(txt).toContain('---- alpha (id: 1) ----');
+    expect(txt).toContain('path: a.txt (2 bytes)');
+    // zero-file repo under `all`: header (+URL) only, no file blocks
+    expect(txt).toContain('---- beta (id: 2) ----');
+    expect(txt).not.toContain('path: pkg.json');
   });
 
   it('meta: 403 tree error → branchExists: false', async () => {

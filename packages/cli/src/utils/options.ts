@@ -238,6 +238,8 @@ export type FetchFilesCliOptions = {
   interactive?: boolean;
   enableLogs?: boolean;
   format?: FetchFilesOutputFormat;
+  /** Which repositories get artifacts (`found`/`all`). CLI-only, no config. */
+  outputFilter?: OutputFilter;
   /** Path to write performance metrics (NDJSON). Diagnostic; only via CLI flag. */
   metricsFile?: string;
   /** From global `--private-token`. Overrides PRIVATE_TOKEN env. */
@@ -276,6 +278,8 @@ export type ResolvedFetchFilesOptions = {
   enableLogs: boolean;
   /** Report format: `json` (default), `ndjson` or `txt`. */
   format: FetchFilesOutputFormat;
+  /** Which repositories get artifacts: `found` (default) or `all`. CLI-only. */
+  outputFilter: OutputFilter;
   /** Path to write performance metrics (NDJSON); `undefined` → no metrics file. */
   metricsFile: string | undefined;
 };
@@ -365,6 +369,7 @@ export function resolveFetchFilesOptions(
     interactive: cliOpts.interactive ?? false,
     enableLogs,
     format: cliOpts.format ?? 'json',
+    outputFilter: cliOpts.outputFilter ?? 'found',
     // metricsFile comes ONLY from the CLI flag (diagnostic, opt-in) — never
     // from config or env (same spec decision as find-matches).
     metricsFile: cliOpts.metricsFile,

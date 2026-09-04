@@ -49,7 +49,6 @@ describe('index > public API surface', () => {
     // refactors do not silently drop it.
     const exportedNames = Object.keys(indexModule).sort();
     expect(exportedNames).toEqual([
-      'MAX_EMBED_BYTES',
       '__reExportSentinel',
       'configureLogger',
       'fetchFiles',
