@@ -226,6 +226,238 @@ Behaviour:
 
 ---
 
+## `fetch-files` — download files by name from many repos
+
+Downloads every file matching the given name/glob patterns (e.g. all
+`package-lock.json`) from all reachable repositories in a single run — so you
+can analyze the collected files locally (jq, dependency search, scripts)
+without downloading repo archives again and again.
+
+```bash
+gitlab-analyzer fetch-files [options] <patterns...>
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `<patterns...>` | One or more glob patterns for file paths (see [Pattern matching](#pattern-matching)) (required) | — |
+| `-r, --repo-filter <str>` | Substring filter for project names (passed to GitLab `search=`) | — |
+| `-e, --exclude <list>` | Comma-separated repo names to skip | `[]` |
+| `-b, --branch <name>` | Branch to fetch files from in every project | `develop` |
+| `--file-exclude <list>` | Comma-separated glob patterns; matching files are always skipped (wins over the positional patterns). Same basename/full-path rule as the patterns | `[]` |
+| `--format <json\|ndjson\|txt>` | Output layout — see [Formats](#formats) | `json` |
+| `--output-filter <found\|all>` | Which repositories get artifacts: `found` = only repos with files, `all` = every scanned repo (including `not-found`/`error`) | `found` |
+| `-o, --output <dir>` | Output **directory** (not a file path): results go into `<dir>/fetch-files-results-<timestamp>/` | cwd |
+| `-c, --concurrency <n>` | Max parallel repositories (a repo's tree listing + all its file downloads share one slot) | `5` |
+| `--interactive` | Pick repos manually before fetching (all pre-selected; shows up to 50, ↑/↓ scrolls, space toggles, Enter confirms) | off |
+| `--enable-logs` | Verbose debug/API logging (auto-enabled with `--interactive`) | off |
+| `--metrics-file <path>` | Write performance metrics (NDJSON: `run`/`repo`/`summary`) to a file. Diagnostic only — does not affect the results | — |
+| `-h, --help` | Show help | — |
+
+Plus the [global flags](#global-flags) (`--gitlab-url`, `--private-token`).
+Tokens are read **only** from env vars / `.env` or the `--private-token` CLI
+flag — never from config.
+
+### Formats
+
+Every run creates a **new timestamped directory** `fetch-files-results-<timestamp>/`
+(in the current directory, or inside `-o <dir>` when given); previous runs are
+never overwritten.
+
+**`--format json` (default)** — a single `results.json` holding every repo with
+the file contents embedded as an array: `[{repo, projectId, webUrl, branch,
+files: [{path, bytes, content}]}]`. Text files of **any size** are embedded in
+`content`; binary files get `content: null` plus `savedAs` pointing to the
+separate file on disk. With the default `--output-filter found`, repos with no
+matches (`not-found`) or an error do not appear in the array; with
+`--output-filter all` they appear with `files: []`:
+
+```
+fetch-files-results-<timestamp>/
+├── meta.json
+├── results.json              ← all repos, contents embedded
+└── frontend-app/             ← separate binaries only
+    └── assets/logo.png
+```
+
+**`--format ndjson`** — one `<repo>.ndjson` file per repository in the results
+directory root (duplicate repo names from different groups get a `-1`, `-2`…
+suffix with a warning). Each line is a **self-contained record** of one file —
+embedded text carries `content`, binary files carry `content: null` plus
+`savedAs` pointing to the separate file on disk. There is no flat index
+anymore: meta.json is the cross-repo index.
+
+```
+{"projectId":42,"repo":"frontend-app","branch":"develop","path":"package-lock.json","bytes":214853,"content":"{ … }"}
+{"projectId":42,"repo":"frontend-app","branch":"develop","path":"assets/logo.png","bytes":4096,"content":null,"savedAs":"frontend-app/assets/logo.png"}
+```
+
+```
+fetch-files-results-<timestamp>/
+├── meta.json
+├── frontend-app.ndjson       ← 2 lines (text + binary)
+├── frontend-app/             ← binaries of frontend-app
+│   └── assets/logo.png
+└── backend-api.ndjson        ← 1 line
+```
+
+**`--format txt`** — a human-readable dump with content, modeled on the
+`find-matches` txt report: repo name → URL → `path: <path> (<bytes>)` → file
+body; binary files get a placeholder line; text of any size is embedded.
+Written into the same results directory.
+
+### meta.json
+
+Written to the root of the results directory; two flat arrays, no content:
+
+```json
+{
+  "generatedAt": "2026-08-28T14:30:05.412Z",
+  "branch": "develop",
+  "patterns": ["package-lock.json"],
+  "format": "json",
+  "repos": [
+    { "projectId": 42, "projectName": "frontend-app",
+      "webUrl": "https://gitlab.example.com/group/frontend-app",
+      "branch": "develop", "status": "fetched", "branchExists": true,
+      "filesTotal": 2, "filesFetched": 2, "filesFailed": 0, "error": null }
+  ],
+  "files": [
+    { "projectId": 42, "repo": "frontend-app", "branch": "develop",
+      "path": "package-lock.json", "bytes": 214853,
+      "storage": "json", "savedAs": "results.json",
+      "status": "fetched", "error": null }
+  ]
+}
+```
+
+- `repos[].status` — `fetched | not-found | partial | error` (unreachable
+  repos and repos with a missing branch both end as `error`: a 404 on the
+  tree listing does not distinguish the causes). `branchExists` is a
+  heuristic: `true` only when the repo completed without an error.
+- `files[].status` — `fetched | binary | failed`; `storage` —
+  `json` (embedded in results.json) `| ndjson` (a line in the per-repo
+  `.ndjson`) `| file` (separate binary, or embedded in results.txt) (or `null`
+  for failed files); `savedAs` — the actual location of the content, so every
+  record traces to disk.
+
+### Automatic behaviour (no flags)
+
+- Text files that are valid UTF-8 are embedded in the output **regardless of
+  size** (no size cap — a huge text file is fully loaded into memory by
+  design).
+- Binary files are **always** saved as separate files with a warning (status
+  `binary`), under `<resultsDir>/<repo>/<relative path>` — in **all** formats.
+- **429 (rate limit)** — up to 2 retries with exponential backoff (1s → 2s,
+  honouring `Retry-After`); only 429s are retried, other errors fail
+  immediately. Exhausted retries mark the repo `error`/`partial`.
+- **Tree pagination** is capped at 100 pages (~10k entries) per repo with a
+  loop guard; hitting the cap logs a warning and marks the repo `partial`.
+- **Unsafe paths** (path traversal, Windows-reserved names, illegal
+  characters) are **skipped, never renamed** — the check runs before any
+  other decision, so an unsafe file is neither embedded in the artifacts nor
+  written separately, in **all** formats: a warning is printed, the file
+  gets `status: "failed"` in meta, and the repo may become `partial`.
+- **Name collisions** (duplicate repo names → per-repo `.ndjson` artifacts;
+  same-named files inside one target directory for separate binaries) get a
+  `-1`, `-2`… suffix until a free name is found + a warning; `savedAs` in
+  meta always points to the actual location.
+- Progress, warnings and the final `✓ Fetched N files (M repos), total X MB`
+  summary (plus the path to `meta.json`) go to **stderr**.
+
+### Pattern matching
+
+Tree paths always start with `/` (e.g. `/src/foo.ts`), exactly like paths
+inside archives in `find-matches`. A pattern **with a slash** matches the full
+path (use `**/` to traverse directories); a pattern **without a slash** matches
+by **file name (basename)** in any directory.
+
+| Pattern | What it finds |
+|---|---|
+| `package-lock.json` | By basename in any directory (including the repo root) |
+| `**/package-lock.json` | Same as above (explicit full-path form) |
+| `*.ts` | Any `.ts` file by basename in any directory |
+| `**/*.ts` | Any path ending in `.ts`, at any depth |
+| `src/**/*.ts` | Does **NOT** match `/src/foo.ts` — tree paths carry a leading `/`; use `**/src/**/*.ts` |
+| `**/src/**/*.ts` | Files only under a `src/` directory at any depth |
+| `/src/foo.ts` | The exact path from the repo root |
+| `**/*.test.*` | All test files |
+| `**/node_modules/**/package-lock.json` | Only nested lock files (monorepo) |
+
+### Examples
+
+**Linux / macOS (bash/zsh):**
+
+```bash
+# Minimal run (requires .env)
+gitlab-analyzer fetch-files 'package-lock.json'
+
+# Token from an environment variable (no .env needed)
+export PRIVATE_TOKEN="$MY_GITLAB_TOKEN"
+export GITLAB_URL="https://gitlab.example.com"
+gitlab-analyzer fetch-files 'package-lock.json' 'yarn.lock'
+
+# One <repo>.ndjson file per repo, contents embedded per line
+gitlab-analyzer fetch-files 'package-lock.json' --format ndjson
+
+# Everything in one results.json
+gitlab-analyzer fetch-files 'package-lock.json' -o ./out --format json
+```
+
+**Windows (PowerShell):** line continuation uses a backtick (`` ` ``); set env vars via `$env:`.
+
+```powershell
+# Minimal run
+gitlab-analyzer fetch-files 'package-lock.json'
+
+# One <repo>.ndjson file per repo
+gitlab-analyzer fetch-files 'package-lock.json' --format ndjson
+
+# Everything in one results.json
+gitlab-analyzer fetch-files 'package-lock.json' `
+  -o ./out `
+  --format json
+
+# Token from an environment variable (no .env needed)
+$env:PRIVATE_TOKEN=$env:MY_GITLAB_TOKEN
+$env:GITLAB_URL="https://gitlab.example.com"
+gitlab-analyzer fetch-files 'package-lock.json'
+```
+
+**Windows (cmd):** line continuation uses `^`, env vars via `set`:
+
+```bat
+set PRIVATE_TOKEN=%MY_GITLAB_TOKEN%
+set GITLAB_URL=https://gitlab.example.com
+gitlab-analyzer fetch-files "package-lock.json"
+
+gitlab-analyzer fetch-files "package-lock.json" --format ndjson
+
+gitlab-analyzer fetch-files "package-lock.json" ^
+  -o out ^
+  --format json
+```
+
+#### Good to know
+
+- **Zero matches is not an error** — a run where no file matches any pattern
+  still writes `meta.json` (all repos `not-found`), prints a warning and
+  exits `0`.
+- **Every run creates a fresh timestamped directory** — nothing is ever
+  overwritten, so run history is preserved.
+- Trace every file to its location via meta.json with jq:
+
+  ```bash
+  jq -r '.files[] | select(.savedAs) | "\(.repo)\t\(.path)\t\(.savedAs)"' fetch-files-results-*/meta.json
+  ```
+
+- Or read the collected contents straight from a per-repo ndjson artifact:
+
+  ```bash
+  jq -r 'select(.content) | .content' fetch-files-results-*/frontend-app.ndjson
+  ```
+
+---
+
 ## Configuration (optional)
 
 Option resolution precedence (highest wins):

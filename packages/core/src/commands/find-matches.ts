@@ -24,7 +24,7 @@ import type {
  * its leading `/`). The picomatch matcher is compiled once, outside the
  * returned closure, so it isn't rebuilt per file.
  */
-function compileMatcher(pattern: string): (path: string) => boolean {
+export function compileMatcher(pattern: string): (path: string) => boolean {
   const isMatch = picomatch(pattern);
   if (pattern.includes('/')) {
     return isMatch;

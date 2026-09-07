@@ -51,6 +51,7 @@ describe('index > public API surface', () => {
     expect(exportedNames).toEqual([
       '__reExportSentinel',
       'configureLogger',
+      'fetchFiles',
       'findMatches',
       'flushLogs',
       'formatDuration',

@@ -1,5 +1,30 @@
 # @gitlab-analyzer/cli
 
+## 0.2.0
+
+### Minor Changes
+
+- a37ef2b: New `fetch-files` command: downloads every file matching glob
+  patterns (e.g. all `package-lock.json`) from all reachable repositories in
+  a single run — tree walk + raw blob fetch, parallel by repo
+  (`--concurrency`, default 5), `--branch`, `--repo-filter`, `--exclude`,
+  `--file-exclude`, `--interactive`, `--metrics-file`. Results land in a
+  fresh timestamped `fetch-files-results-<timestamp>/` directory with
+  `meta.json` and three output layouts via `--format`:
+  - `json` (default) — one `results.json` with all repos and embedded
+    contents; binaries saved separately, referenced via `savedAs`;
+  - `ndjson` — one self-contained `<repo>.ndjson` per repo (one line per
+    file, binaries carry `savedAs`; no flat `results.ndjson` index);
+  - `txt` — human-readable dump with placeholders for binaries/failed files.
+  New `--output-filter <found|all>` selects which repos get artifacts
+  (default `found`). Unsafe paths are skipped with `status: "failed"` in
+  meta; the repo may drop to `partial`.
+
+### Patch Changes
+
+- Updated dependencies
+  - @gitlab-analyzer/core@0.1.0
+
 ## 0.1.0
 
 ### Minor Changes

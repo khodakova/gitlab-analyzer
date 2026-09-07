@@ -47,6 +47,17 @@ export type {
   MatchResult,
   FileFilters,
 } from './commands/find-matches.types.ts';
+export { fetchFiles } from './commands/fetch-files.ts';
+export type {
+  FetchFilesOptions,
+  FetchFilesResult,
+  FetchedRepo,
+  FetchedFile,
+  FetchedFileStatus,
+  RepoStatus,
+  SaveFileInput,
+  SaveFileResult,
+} from './commands/fetch-files.types.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
 export { configureLogger, logger, flushLogs, formatDuration } from './utils/logger.ts';
