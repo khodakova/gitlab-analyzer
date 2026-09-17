@@ -58,4 +58,18 @@ describe('getProjectArchive metrics accumulator', () => {
     const data = await getProjectArchive(42, { projectName: 'repo', branch: 'dev' });
     expect(data).toBeInstanceOf(ArrayBuffer);
   });
+
+  // ---------- Uncovered cases from docs/test-cases.md section 8 ----------
+
+  it('case 27: getProjectRepositorySize swallows any failure → resolves undefined (never rejects)', async () => {
+    const { getProjectRepositorySize } = await import('../project-archive.ts');
+
+    // API error (e.g. no rights) → swallowed.
+    getSpy.mockRejectedValueOnce(new Error('401 Unauthorized'));
+    await expect(getProjectRepositorySize(42)).resolves.toBeUndefined();
+
+    // Missing statistics block → undefined, no throw.
+    getSpy.mockResolvedValue({ data: {} } as never);
+    await expect(getProjectRepositorySize(42)).resolves.toBeUndefined();
+  });
 });

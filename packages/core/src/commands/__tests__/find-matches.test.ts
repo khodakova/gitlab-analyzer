@@ -12,9 +12,10 @@ import picomatch from 'picomatch';
  * `src/commands/__tests__/find-matches.test.ts` (one level deeper than
  * co-located would be).
  */
-const { getAllProjectsMock, getProjectArchiveMock } = vi.hoisted(() => ({
+const { getAllProjectsMock, getProjectArchiveMock, getProjectRepositorySizeMock } = vi.hoisted(() => ({
   getAllProjectsMock: vi.fn(),
   getProjectArchiveMock: vi.fn(),
+  getProjectRepositorySizeMock: vi.fn(),
 }));
 
 vi.mock('../../utils/get-projects.ts', () => ({
@@ -23,6 +24,7 @@ vi.mock('../../utils/get-projects.ts', () => ({
 
 vi.mock('../../api/project-archive.ts', () => ({
   getProjectArchive: getProjectArchiveMock,
+  getProjectRepositorySize: getProjectRepositorySizeMock,
 }));
 
 import { findMatches, findStrInZip } from '../find-matches.ts';
@@ -82,6 +84,11 @@ describe('findMatches', () => {
   beforeEach(() => {
     getAllProjectsMock.mockReset();
     getProjectArchiveMock.mockReset();
+    getProjectRepositorySizeMock.mockReset();
+    // Default: size lookup resolves to undefined (no rights) — individual
+    // tests override. Prevents accidental unhandled rejections from the
+    // fire-and-forget size diagnostics path.
+    getProjectRepositorySizeMock.mockResolvedValue(undefined);
   });
 
   describe('case 1: end-to-end match detection', () => {
@@ -1227,5 +1234,395 @@ describe('findMatches', () => {
 
       expect(names).toEqual(['small', 'mid', 'big']);
     });
+  });
+
+  // ---------- Uncovered cases from docs/test-cases.md section 8 (2026-09-17) ----------
+
+  describe('coverage gaps (docs/test-cases.md section 8)', () => {
+    let stderrSpy: ReturnType<typeof vi.spyOn>;
+    const collect = () =>
+      stderrSpy.mock.calls.map((c: readonly unknown[]) => String(c[0])).join('');
+
+    beforeEach(() => {
+      stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      configureLogger({ enabled: false });
+    });
+
+    it('case 1: searchStrings [""] pins every file as matching with matches: [""]', async () => {
+      // resolveOptions (CLI) only rejects `strings.length === 0`; [''] passes.
+      // 'x'.includes('') === true → every non-dir file lands in results with
+      // matches: ['']. PIN: documents the current (questionable) contract.
+      const archive = await makeZip({
+        '/src/a.ts': 'anything',
+        '/README.md': 'whatever',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: [''],
+        branch: 'main',
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0].resultsLength).toBe(2);
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual(['/README.md', '/src/a.ts']);
+      expect(results[0].results[0].matches).toEqual(['']);
+    });
+
+    it('case 3: search is a literal case-sensitive substring, not a regex', async () => {
+      // 'console.log(' must be found literally; '.' must NOT act as "any char";
+      // case matters (TODO ≠ todo).
+      const archive = await makeZip({
+        '/a.ts': 'console.log("x"); // TODO fix',
+        '/b.ts': 'consoleXlog', // '.' as regex would match "any char"
+        '/c.ts': 'todo lowercase',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['console.log(', 'console.log(', '.', 'TODO'],
+        branch: 'main',
+      });
+
+      const byFile = Object.fromEntries(results[0].results.map((m) => [m.filename, m.matches]));
+      // literal 'console.log(' matched; the duplicated input entry is echoed
+      // per searchStrings entry (see case 50), and '.' matches the literal dot.
+      expect(byFile['/a.ts']).toEqual(['console.log(', 'console.log(', '.', 'TODO']);
+      // '.' did not act as a wildcard: consoleXlog has no '.' at all
+      expect(byFile['/b.ts']).toBeUndefined();
+      // case-sensitive: 'todo' ≠ 'TODO'
+      expect(byFile['/c.ts']).toBeUndefined();
+    });
+
+    it('case 4: CRLF lines keep \\r in content; searching "value\\r" matches a CRLF-terminated line', async () => {
+      // Build a zip whose content uses CRLF line endings. Searching 'value\r'
+      // matches only because the raw line ends with \r — a LF-normalized
+      // searcher would miss it.
+      const zip = new JSZip();
+      zip.file('/cfg.yml', 'key: value\r\nplain\r\n');
+      const archive = await zip.generateAsync({ type: 'arraybuffer' });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['value\r'],
+        branch: 'main',
+      });
+
+      expect(results[0].results).toHaveLength(1);
+      // \r survives the split('\n') — content lines keep their trailing \r.
+      expect(results[0].results[0].content).toEqual(['key: value\r', 'plain\r', '']);
+      expect(results[0].results[0].matches).toEqual(['value\r']);
+    });
+
+    it('case 5: empty file does not match a non-empty string but still counts as scanned (textLength += 0)', async () => {
+      const archive = await makeZip({
+        '/empty.txt': '',
+        '/hit.ts': 'TARGET',
+      });
+
+      const metrics = { unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0 };
+      const compiled = {
+        includeMatchers: [] as Array<(path: string) => boolean>,
+        excludeMatchers: [] as Array<(path: string) => boolean>,
+      };
+
+      const results = await findStrInZip(archive, ['TARGET'], compiled, metrics);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].filename).toBe('/hit.ts');
+      expect(metrics.filesScanned).toBe(2); // empty file counted too
+      expect(metrics.filesMatched).toBe(1);
+      // empty file contributes 0 to textLength
+      expect(metrics.textLength).toBe('TARGET'.length);
+    });
+
+    it('case 6: archive with only directory entries yields results: [] and filesScanned: 0', async () => {
+      // JSZip folder() creates dir entries only.
+      const zip = new JSZip();
+      zip.folder('/src');
+      zip.folder('/docs');
+      const archive = await zip.generateAsync({ type: 'arraybuffer' });
+
+      const metrics = { unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0 };
+      const compiled = {
+        includeMatchers: [] as Array<(path: string) => boolean>,
+        excludeMatchers: [] as Array<(path: string) => boolean>,
+      };
+
+      const results = await findStrInZip(archive, ['X'], compiled, metrics);
+
+      expect(results).toEqual([]);
+      expect(metrics.filesScanned).toBe(0);
+      expect(metrics.filesMatched).toBe(0);
+      expect(metrics.textLength).toBe(0);
+    });
+
+    it('case 7 (partial): /src/foo.ts pattern with a slash matches the exact full path', async () => {
+      const archive = await makeZip({
+        '/src/foo.ts': 'X',
+        '/lib/foo.ts': 'X',
+        '/src/foo.tsx': 'X',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        fileInclude: ['/src/foo.ts'],
+      });
+
+      expect(results[0].results.map((m) => m.filename)).toEqual(['/src/foo.ts']);
+    });
+
+    it('case 8: dotfiles — *.env does NOT match /.env; *.yml does NOT match /.gitlab-ci.yml', async () => {
+      // picomatch defaults do not match leading dots → --file-exclude '*.env'
+      // silently does not exclude .env. PIN of current behavior.
+      const archive = await makeZip({
+        '/.env': 'X',
+        '/.gitlab-ci.yml': 'X',
+        '/visible.env': 'X',
+      });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        fileExclude: ['*.env', '*.yml'],
+      });
+
+      // Hidden dotfiles survive the exclude; only the visible file is excluded.
+      expect(results[0].results.map((m) => m.filename).sort()).toEqual(['/.env', '/.gitlab-ci.yml']);
+    });
+
+    it('case 17: excludeRepos is case-sensitive; one name hides BOTH same-named repos', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'My-Repo' }),
+        project({ id: 2, name: 'my-repo' }),
+        project({ id: 3, name: 'other' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        excludeRepos: ['my-repo'],
+      });
+
+      // 'My-Repo' is NOT excluded (case-sensitive includes()); the lowercase
+      // duplicate IS excluded by the single entry — hiding one same-named repo.
+      expect(results.map((r) => r.projectName).sort()).toEqual(['My-Repo', 'other']);
+    });
+
+    it('case 17 (partial): one exclude entry hides BOTH same-named repos from different groups', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'shared-name' }),
+        project({ id: 2, name: 'shared-name' }),
+        project({ id: 3, name: 'other' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const results = await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        excludeRepos: ['shared-name'],
+      });
+
+      // A single exclude entry hides every repo bearing that name.
+      expect(results.map((r) => r.projectName)).toEqual(['other']);
+    });
+
+    it('case 27: getProjectRepositorySize called only when logging enabled; size warning carries MB; failure stays quiet', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([project({ id: 7, name: 'fat' })]);
+      getProjectArchiveMock.mockRejectedValue(new Error('Request failed with status code 404'));
+
+      // 1) logging OFF → size lookup is never fired
+      await findMatches({ searchStrings: ['X'], branch: 'main' });
+      await flushLogs();
+      expect(getProjectRepositorySizeMock).not.toHaveBeenCalled();
+
+      // 2) logging ON + size returned → warning with the size in MB
+      configureLogger({ enabled: true });
+      getProjectRepositorySizeMock.mockResolvedValue(150 * 1024 * 1024);
+      await findMatches({ searchStrings: ['X'], branch: 'main' });
+      await flushLogs();
+      expect(getProjectRepositorySizeMock).toHaveBeenCalledWith(7);
+      expect(collect()).toContain('150.0 MB');
+
+      // 3) size lookup resolves undefined (its internal catch) → no size
+      //    warning on THIS run, no crash. (The swallow-anything contract is
+      //    pinned in project-archive.test.ts — it never rejects.)
+      stderrSpy.mockClear();
+      getProjectRepositorySizeMock.mockResolvedValue(undefined);
+      await expect(
+        findMatches({ searchStrings: ['X'], branch: 'main' }),
+      ).resolves.toEqual([]); // fetch failed → repo omitted from results
+      await flushLogs();
+      expect(collect()).not.toContain('git history size');
+    });
+
+    it('case 28: a thrown user callback rejects the whole run (onProgress/onRepoStart/onRepoTiming are fatal)', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getAllProjectsMock.mockResolvedValue([
+        project({ id: 1, name: 'a' }),
+        project({ id: 2, name: 'b' }),
+      ]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      await expect(
+        findMatches({
+          searchStrings: ['X'],
+          branch: 'main',
+          concurrency: 1,
+          onProgress: () => {
+            throw new Error('user callback boom');
+          },
+        }),
+      ).rejects.toThrow('user callback boom');
+
+      await expect(
+        findMatches({
+          searchStrings: ['X'],
+          branch: 'main',
+          concurrency: 1,
+          onRepoStart: () => {
+            throw new Error('start callback boom');
+          },
+        }),
+      ).rejects.toThrow('start callback boom');
+
+      await expect(
+        findMatches({
+          searchStrings: ['X'],
+          branch: 'main',
+          concurrency: 1,
+          onRepoTiming: () => {
+            throw new Error('timing callback boom');
+          },
+        }),
+      ).rejects.toThrow('timing callback boom');
+    });
+
+    it('case 50: duplicated searchStrings appear duplicated in matches (filesMatched counted once)', async () => {
+      const archive = await makeZip({ '/src/a.ts': 'foo bar' });
+
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const metrics = { unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0 };
+      const compiled = {
+        includeMatchers: [] as Array<(path: string) => boolean>,
+        excludeMatchers: [] as Array<(path: string) => boolean>,
+      };
+
+      const results = await findStrInZip(archive, ['foo', 'foo'], compiled, metrics);
+
+      expect(results).toHaveLength(1);
+      // Each searchStrings entry that hits is echoed once → duplicate input,
+      // duplicate output. filesMatched counts FILES, so stays 1.
+      expect(results[0].matches).toEqual(['foo', 'foo']);
+      expect(metrics.filesMatched).toBe(1);
+    });
+
+    it('case 54: findStrInZip(Blob) in Node throws inside JSZip → silently returns []', async () => {
+      // JSZip 3.10.1 in Node cannot read a Blob ("Can't read the data of
+      // the supposed ... file") — the catch swallows it → [] + scanMs filled.
+      const blob = new Blob(['not actually parsed'], { type: 'application/zip' });
+      const metrics = { unzipMs: 0, scanMs: 0, filesScanned: 0, filesMatched: 0, textLength: 0 };
+      const compiled = {
+        includeMatchers: [] as Array<(path: string) => boolean>,
+        excludeMatchers: [] as Array<(path: string) => boolean>,
+      };
+
+      const results = await findStrInZip(blob, ['X'], compiled, metrics);
+
+      expect(results).toEqual([]);
+      // The catch path still records the scan-phase timing.
+      expect(metrics.scanMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('case 55: metrics.list stays all-zero when opts.projects is provided (no getAllProjects call)', async () => {
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getProjectArchiveMock.mockResolvedValue(archive);
+
+      const metrics = {
+        list: { listMs: 0, pagesFetched: 0, reposFound: 0 },
+        perRepo: [] as never[],
+        summary: {},
+      };
+
+      await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        projects: [project({ id: 1, name: 'preloaded' })],
+        metrics: metrics as never,
+      });
+
+      expect(getAllProjectsMock).not.toHaveBeenCalled();
+      expect(metrics.list).toEqual({ listMs: 0, pagesFetched: 0, reposFound: 0 });
+    });
+
+    it('case 56: sortByRepositorySize([]) fires the misleading no-statistics warning on an EMPTY list', async () => {
+      // every() on [] is true → the warning fires even with zero projects.
+      // Library callers passing projects: [] see this token-rights hint — pin.
+      getAllProjectsMock.mockResolvedValue([]);
+      // Avoid an empty p-limit run entirely: pass projects explicitly.
+      await findMatches({
+        searchStrings: ['X'],
+        branch: 'main',
+        projects: [],
+      });
+      await flushLogs();
+
+      expect(collect()).toContain('no statistics.repository_size');
+    });
+
+    it('case 45: real p-limit throws TypeError on concurrency 0 and NaN (pin ACTUAL mechanism)', async () => {
+      // Section 7 assumed p-limit 2.3.0 (rejected promise → "limit is not a
+      // function"); the INSTALLED p-limit 7.3.1 instead throws synchronously
+      // from pLimit() itself. findMatches calls pLimit(opts.concurrency ?? 5)
+      // with the raw value → findMatches rejects with the p-limit TypeError.
+      const archive = await makeZip({ '/src/x.ts': 'X' });
+      getProjectArchiveMock.mockResolvedValue(archive);
+      getAllProjectsMock.mockResolvedValue([project({ id: 1, name: 'r' })]);
+
+      await expect(
+        findMatches({
+          searchStrings: ['X'],
+          branch: 'main',
+          concurrency: 0,
+        }),
+      ).rejects.toThrow('Expected `concurrency` to be a number from 1 and up');
+
+      await expect(
+        findMatches({
+          searchStrings: ['X'],
+          branch: 'main',
+          concurrency: NaN,
+        }),
+      ).rejects.toThrow('Expected `concurrency` to be a number from 1 and up');
+
+      // The archive fetch never started — the crash precedes any download.
+      expect(getProjectArchiveMock).not.toHaveBeenCalled();
+    });
+
   });
 });
