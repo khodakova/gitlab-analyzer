@@ -537,4 +537,69 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       if (res.ok) expect(res.resolved.outputFilter).toBe('all');
     });
   });
+
+  // ---------- Uncovered cases from docs/test-cases.md section 8 ----------
+
+  describe('coverage gaps (docs/test-cases.md section 8)', () => {
+    it('case 12 (partial): CLI fileInclude [""] / [" "] / [","] — parseCommaList already empties them, [] replaces config', () => {
+      // parseCommaList(' ')/(',') → [] (cli.ts). If a raw [''] slips through
+      // (library callers), it is still just [] after any trim; either way the
+      // empty CLI array REPLACES config and disables the filter.
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileInclude: ['**/*.ts'] },
+      };
+
+      const result = resolveOptions(['x'], { fileInclude: [] }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.fileInclude).toEqual([]);
+        // Not merged with config — the filter is silently OFF.
+      }
+    });
+
+    it('case 33: --branch "" (empty string) overrides config branch — ?? does not catch ""', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, branch: 'main' },
+      };
+
+      const result = resolveOptions(['x'], { branch: '' }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // PIN: empty CLI string wins over config AND over the 'develop' default.
+        expect(result.resolved.branch).toBe('');
+      }
+    });
+
+    it('case 33: --exclude [] (empty array) overrides non-empty config.excludeRepos', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, excludeRepos: ['from-config'] },
+      };
+
+      const result = resolveOptions(['x'], { exclude: [] }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.excludeRepos).toEqual([]);
+      }
+    });
+
+    it('case 33: --file-include [] (empty array) overrides non-empty config.fileInclude', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileInclude: ['**/*.ts'] },
+      };
+
+      const result = resolveOptions(['x'], { fileInclude: [] }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.fileInclude).toEqual([]);
+      }
+    });
+  });
 });

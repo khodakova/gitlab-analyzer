@@ -865,4 +865,197 @@ describe('runFindMatches (exported helper)', () => {
       exitSpy.mockRestore();
     });
   });
+
+  // ---------- Uncovered cases from docs/test-cases.md section 8 ----------
+
+  describe('coverage gaps (docs/test-cases.md section 8)', () => {
+    let exitSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      exitSpy = vi.spyOn(process, 'exit').mockImplementation(((
+        _code?: number | string | null,
+      ) => {
+        throw new Error(`process.exit(${String(_code)})`);
+      }) as never);
+    });
+
+    afterEach(() => {
+      exitSpy.mockRestore();
+    });
+
+    /** Swallow the process.exit(N) sentinel thrown by the mocked exit impl. */
+    const swallowExit = (p: Promise<unknown>) =>
+      p.catch((e: unknown) => {
+        if (e instanceof Error && e.message.startsWith('process.exit(')) return;
+        throw e;
+      });
+
+    it('case 13 (CLI part): success repo with a MALFORMED zip reports error:null / branchExists:true (indistinguishable from zero matches)', async () => {
+      // findMatches (mocked) returns a zero-match result — the CLI cannot tell
+      // "scanned fine, nothing found" from "zip parse failed → silent []".
+      // Core half of the pin lives in core/fm; this pins the report side.
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockImplementation(async (opts: Parameters<typeof mocks.findMatches>[0]) => {
+        opts.onProgress?.(1, 1, 'brokenzip');
+        return [
+          {
+            projectId: 1,
+            projectName: 'brokenzip',
+            projectDescription: null,
+            resultsLength: 0,
+            results: [],
+          },
+        ];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindMatches(['needle'], { output: '/tmp/out.json' });
+
+      const repo = result.report.repositories[0];
+      expect(repo.projectName).toBe('brokenzip');
+      expect(repo.error).toBeNull();          // ← no error recorded
+      expect(repo.branchExists).toBe(true);   // ← treated as a healthy repo
+      expect(repo.results).toEqual([]);
+    });
+
+    it('case 14: two projects with the SAME name from different groups — the second MatchResult is silently dropped (bug doc)', async () => {
+      // assembleReport dedupes by projectName via a `seen` set: the second
+      // MatchResult (id 2, its own matches) never reaches the report. After a
+      // fix, both repositories (id 1 and id 2) must be present.
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'dup', description: null, web_url: 'https://gitlab/g1/dup' },
+        { id: 2, name: 'dup', description: null, web_url: 'https://gitlab/g2/dup' },
+      ]);
+      mocks.findMatches.mockImplementation(async (opts: Parameters<typeof mocks.findMatches>[0]) => {
+        opts.onProgress?.(1, 2, 'dup');
+        opts.onProgress?.(2, 2, 'dup');
+        return [
+          {
+            projectId: 1,
+            projectName: 'dup',
+            projectDescription: null,
+            resultsLength: 1,
+            results: [{ filename: '/g1/a.ts', matches: ['needle'], content: ['needle'] }],
+          },
+          {
+            projectId: 2,
+            projectName: 'dup',
+            projectDescription: null,
+            resultsLength: 1,
+            results: [{ filename: '/g2/b.ts', matches: ['needle'], content: ['needle'] }],
+          },
+        ];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindMatches(['needle'], {});
+
+      const dups = result.report.repositories.filter((r) => r.projectName === 'dup');
+      // BUG: only the first result survives the `seen` dedupe — 1 entry,
+      // 2 total match files expected after a fix.
+      expect(dups).toHaveLength(1);
+      expect(result.report.repositories).toHaveLength(1);
+      // map last-write-wins: webUrl comes from the LAST filtered project (id 2)
+      expect(dups[0].webUrl).toBe('https://gitlab/g2/dup');
+    });
+
+    it('case 32: crash mid-run → NO report file AND NO metrics file are written', async () => {
+      // writeSummary('complete'|'cancel'|'no-repos') is only reached on the
+      // three normal exits; a throw inside findMatches bypasses all of them.
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockRejectedValue(new Error('mid-run crash'));
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-crash-${Date.now()}.ndjson`);
+
+      await expect(
+        runFindMatches(['needle'], { metricsFile: metricsPath, output: '/tmp/out.json' }),
+      ).rejects.toThrow('mid-run crash');
+
+      // Not a single write happened — neither report nor metrics NDJSON.
+      expect(mocks.writeFile).not.toHaveBeenCalled();
+      expect(mocks.mkdir).not.toHaveBeenCalled();
+    });
+
+    it('case 46: --metrics-file pointing at the SAME path as --output overwrites the report with NDJSON (bug doc)', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockImplementation(async (opts: Parameters<typeof mocks.findMatches>[0]) => {
+        opts.onProgress?.(1, 1, 'alpha');
+        return [];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const samePath = path.join(os.tmpdir(), `clash-${Date.now()}.json`);
+      await runFindMatches(['needle'], { output: samePath, metricsFile: samePath });
+
+      // Both writes target the same path; metrics (NDJSON) goes LAST and wins.
+      const calls = mocks.writeFile.mock.calls.filter((c) => String(c[0]) === samePath);
+      expect(calls).toHaveLength(2);
+      // The final content on "disk" is the NDJSON, not the JSON report.
+      const finalPayload = String(calls[calls.length - 1][1]);
+      expect(finalPayload).toContain('"t":"run"');
+      expect(finalPayload).not.toContain('"metadata"');
+    });
+
+    it('case 51: interactive with 0 repos after filters goes down the CANCEL path (exitReason cancel), not no-repos', async () => {
+      // The no-repos guard only exists in the headless branch; interactive
+      // mode calls repoSelect([]) → empty selection → 'cancel'. PIN the
+      // asymmetry with the headless no-repos guard.
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([]);
+      mocks.repoSelect.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const metricsPath = path.join(os.tmpdir(), `metrics-empty-interactive-${Date.now()}.ndjson`);
+      await runFindMatches(['needle'], { interactive: true, metricsFile: metricsPath })
+        .then(() => {
+          throw new Error('expected process.exit(0) to be called');
+        })
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(0)') return;
+          throw e;
+        });
+
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(mocks.findMatches).not.toHaveBeenCalled();
+      // The metrics file WAS written (cancel path writes summary) — unlike
+      // the headless no-repos flow this is the only difference in file output.
+      const metricsCall = mocks.writeFile.mock.calls.find((c) => String(c[0]) === metricsPath);
+      expect(metricsCall).toBeDefined();
+      const lines = String(metricsCall![1]).trim().split('\n');
+      expect(JSON.parse(lines[lines.length - 1]).exitReason).toBe('cancel');
+      // No report file was written (only the metrics file).
+      expect(mocks.writeFile.mock.calls.filter((c) => !String(c[0]).endsWith('.ndjson'))).toHaveLength(0);
+    });
+
+    it('case 53: printRunSummary counts UNFILTERED repos — "Scanned repositories: 2" while the found-filtered report holds 1', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'good', description: null },
+        { id: 2, name: 'empty', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(async (opts: Parameters<typeof mocks.findMatches>[0]) => {
+        opts.onProgress?.(1, 2, 'good');
+        opts.onProgress?.(2, 2, 'empty');
+        return [
+          {
+            projectId: 1,
+            projectName: 'good',
+            projectDescription: null,
+            resultsLength: 1,
+            results: [{ filename: '/src/a.ts', matches: ['needle'], content: ['needle'] }],
+          },
+        ];
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const result = await runFindMatches(['needle'], { output: '/tmp/out.json', outputFilter: 'found' });
+
+      // Report file: only 'good' (found filter).
+      expect(result.report.repositories.map((r) => r.projectName)).toEqual(['good']);
+      // stderr summary: counts the UNFILTERED list — mismatch with the file.
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('✓ Scanned repositories: 2');
+    });
+  });
 });
