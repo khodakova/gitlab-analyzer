@@ -1,5 +1,35 @@
 # @gitlab-analyzer/cli
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [59475d2]
+  - @gitlab-analyzer/core@0.2.1
+
+## 0.3.0
+
+### Minor Changes
+
+- a4270ea: New `get-last-commits` command: report the last commit for every selected
+  GitLab repository — the branch tip commit (default) or, with `--file <glob>`,
+  the last commit touching each file matched by the pattern. JSON/txt report
+  with auto-naming, `--stdout`, `-o/--output`, `-c/--concurrency` (default 5),
+  repo filters (`-r`, `-e`, `--interactive`) and `--metrics-file`. Per-repo
+  branch resolution: `-b` → project `default_branch` → `develop`. This command
+  reads no config file (config support is being phased out).
+
+  Also reworks the low-level `getCommits` API helper: it is now typed as
+  `Commit[]` and **throws** on HTTP errors instead of silently returning
+  `null` (the previous behavior). If you consumed `getCommits` directly and
+  relied on the `null` return, handle the thrown error instead. The helper
+  accepts `path`, `ref_name`, `since`, `until` and `per_page` parameters.
+
+### Patch Changes
+
+- Updated dependencies [a4270ea]
+  - @gitlab-analyzer/core@0.2.0
+
 ## 0.2.0
 
 ### Minor Changes
@@ -16,9 +46,9 @@
   - `ndjson` — one self-contained `<repo>.ndjson` per repo (one line per
     file, binaries carry `savedAs`; no flat `results.ndjson` index);
   - `txt` — human-readable dump with placeholders for binaries/failed files.
-  New `--output-filter <found|all>` selects which repos get artifacts
-  (default `found`). Unsafe paths are skipped with `status: "failed"` in
-  meta; the repo may drop to `partial`.
+    New `--output-filter <found|all>` selects which repos get artifacts
+    (default `found`). Unsafe paths are skipped with `status: "failed"` in
+    meta; the repo may drop to `partial`.
 
 ### Patch Changes
 

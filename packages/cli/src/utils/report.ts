@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
 import { extname } from 'node:path';
-import type { MatchResult } from '@gitlab-analyzer/core';
+import { green, yellow } from 'colorette';
+import type { LastCommitReport, MatchResult } from '@gitlab-analyzer/core';
 import type { ResolvedFindMatchesOptions } from './options.ts';
+import { progress } from './progress.ts';
 
 /**
  * Normalized report format, either the JSON object shape (default) or the
@@ -67,31 +69,35 @@ function hasExtension(path: string, ext: string): boolean {
  *
  * - If `--output` is provided, it is used verbatim (after a format/vs-extension
  *   conflict check) and overrides any auto-generated name.
- * - Otherwise an auto name `find-matches-results-<DATE>.<ext>` is generated in
- *   the current directory; if a file with that name already exists a numeric
+ * - Otherwise an auto name `<baseName><DATE>.<ext>` is generated in the
+ *   current directory; if a file with that name already exists a numeric
  *   suffix is appended before the extension (`-1`, `-2`, …) until a free name
  *   is found.
  *
  * @param output - Explicit `--output` path, or `undefined` for auto-naming.
  * @param format - Report format, drives the extension of the auto name.
  * @param date - Timestamp label embedded in the auto name.
+ * @param baseName - Report base name (with trailing `-`), e.g.
+ *   `find-matches-results-` (default, legacy behavior) or
+ *   `get-last-commits-results-` for the get-last-commits command.
  * @returns The concrete path to write to.
  */
 export function resolveOutputPath(
   output: string | undefined,
   format: ReportFormat,
   date: string,
+  baseName = 'find-matches-results-',
 ): string {
   if (output) {
     return output;
   }
   const ext = format === 'txt' ? '.txt' : '.json';
-  const base = `find-matches-results-${date}${ext}`;
+  const base = `${baseName}${date}${ext}`;
   if (!existsSync(base)) {
     return base;
   }
   // Version existing auto-named files: -1, -2, ... up to a free name.
-  const stem = `find-matches-results-${date}`;
+  const stem = `${baseName}${date}`;
   let version = 1;
   let candidate = `${stem}-${version}${ext}`;
   while (existsSync(candidate)) {
@@ -238,4 +244,78 @@ export function formatDate(): string {
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
     `-${pad(d.getHours())}${pad(d.getMinutes())}`
   );
+}
+
+/**
+ * Final run-scope summary block on stderr (shared by report-writing
+ * commands): scanned count, optional errored-repos warning, report path.
+ * Works with any per-repo entry carrying `projectName` and `error`.
+ */
+export function printRunSummary(
+  repositories: ReadonlyArray<{ projectName: string; error: string | null }>,
+  outputPath: string,
+): void {
+  const errored = repositories.filter((r) => r.error !== null);
+  progress.static(''); // separator between the scan and the summary
+  progress.static(green(`✓ Scanned repositories: ${repositories.length}`));
+  if (errored.length > 0) {
+    progress.static(
+      yellow(`⚠ Of which errored: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`),
+    );
+  }
+  progress.static(green(`✓ Report: ${outputPath}`));
+}
+
+/**
+ * Render the `get-last-commits` report as human-readable text. Mirrors the
+ * JSON structure: metadata lines first, then per-repo blocks with the repo
+ * header, `URL:` / `Branch:` lines, the `branchExists` marker and the error
+ * (if any), followed by one line per commit result:
+ * `<path> → <date> <author> <shortId> <title>` (HEAD mode: same line without
+ * the path part).
+ */
+export function renderGetLastCommitsTxt(report: LastCommitReport): string {
+  const lines: string[] = [];
+  const { metadata, repositories } = report;
+
+  lines.push('GitLab last-commit report');
+  lines.push('========================');
+  lines.push(`Generated at: ${metadata.generatedAt}`);
+  lines.push(`Branch: ${metadata.branch ?? '(not set — resolved per repo)'}`);
+  lines.push(`File glob: ${metadata.file ?? '(none — HEAD mode)'}`);
+  lines.push(`Repo name filter: ${metadata.repoNameFilter ?? '(none)'}`);
+  lines.push(
+    `Excluded repos: ${metadata.excludeRepos.length > 0 ? metadata.excludeRepos.join(', ') : '(none)'}`,
+  );
+  lines.push(`Repositories scanned: ${repositories.length}`);
+  lines.push('');
+
+  for (const repo of repositories) {
+    lines.push(`---- ${repo.projectName} (id: ${repo.projectId}) ----`);
+    if (repo.webUrl) {
+      lines.push(`URL: ${repo.webUrl}`);
+    }
+    lines.push(`Branch: ${repo.branch}`);
+    lines.push(`Branch exists: ${repo.branchExists ? 'yes' : 'no'}`);
+    if (repo.truncated) {
+      lines.push('Warning: tree listing truncated (10k-entry cap) — per-file results may be incomplete.');
+    }
+    if (repo.error) {
+      lines.push(`Error: ${repo.error}`);
+    }
+    if (repo.failed.length > 0) {
+      for (const f of repo.failed) {
+        lines.push(`Failed path: ${f.path} (${f.error})`);
+      }
+    }
+    for (const entry of repo.results) {
+      const left = entry.path !== null ? `${entry.path} → ` : '';
+      lines.push(
+        `${left}${entry.committedDate} ${entry.authorName} ${entry.shortId} ${entry.title}`,
+      );
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
 }

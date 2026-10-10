@@ -380,3 +380,147 @@ export function resolveFetchFilesOptions(
   }
   return { ok: true, resolved };
 }
+
+/**
+ * CLI options for the `get-last-commits` subcommand. Produced by commander
+ * and passed into {@link resolveGetLastCommitsOptions}.
+ *
+ * Unlike the other subcommands this command reads NO config file at all
+ * (config support is being phased out of the tool; this command ships
+ * without it — design D5): resolution is CLI → built-in default only.
+ */
+export type GetLastCommitsCliOptions = {
+  repoFilter?: string;
+  exclude?: string[];
+  /** `--file <glob>`; presence switches to per-file mode. */
+  file?: string;
+  /** `-b` flag value; `undefined` → per-repo `default_branch` resolution in core. */
+  branch?: string;
+  output?: string;
+  concurrency?: number;
+  interactive?: boolean;
+  enableLogs?: boolean;
+  format?: 'txt' | 'json';
+  stdout?: boolean;
+  /** Path to write performance metrics (NDJSON). Diagnostic; only via CLI flag. */
+  metricsFile?: string;
+  /** From global `--private-token`. Overrides PRIVATE_TOKEN env. */
+  privateToken?: string;
+  /** From global `--gitlab-url`. Overrides GITLAB_URL env. */
+  gitlabUrl?: string;
+};
+
+/**
+ * Fully resolved `get-last-commits` options — every required field is present
+ * (or the `errors` array is non-empty in {@link resolveGetLastCommitsOptions}'s
+ * return).
+ */
+export type ResolvedGetLastCommitsOptions = {
+  /** Base URL of the GitLab instance (from `GITLAB_URL` env or `--gitlab-url`). */
+  gitlabUrl: string;
+  /** Effective GitLab token (CLI > env). Config never (security policy). */
+  privateToken: string;
+  /** CLI `-b` value, or `undefined` — core resolves `default_branch` per repo. */
+  branch: string | undefined;
+  /** `--file` glob; `undefined` → HEAD mode. */
+  file: string | undefined;
+  /** Substring filter for project names (optional). */
+  repoNameFilter: string | undefined;
+  /** Project names to skip. */
+  excludeRepos: string[];
+  /** Output file path; `undefined` → auto-generated name. */
+  output: string | undefined;
+  /** Max parallel repositories (default 5). */
+  concurrency: number;
+  /** Whether to prompt the user to pick repos before running. */
+  interactive: boolean;
+  /** Whether debug/API logging is enabled (CLI > ENABLE_LOGS env; no config). */
+  enableLogs: boolean;
+  /** Report format: `json` (default) or `txt`. */
+  format: 'txt' | 'json';
+  /** When true, also write the report to stdout (in addition to the file). */
+  stdout: boolean;
+  /** Path to write performance metrics (NDJSON); `undefined` → no metrics file. */
+  metricsFile: string | undefined;
+};
+
+/**
+ * Resolve every `get-last-commits` option from CLI flags and built-in
+ * defaults ONLY (CLI → default). The config file is deliberately NOT read:
+ * `defaults.*` and `commands.*` are ignored (config support is being phased
+ * out; this command has none — design D5). The token comes from CLI → env,
+ * never from config.
+ *
+ * Required (must be present from at least one source):
+ *
+ *   - `gitlabUrl`  — from `--gitlab-url` CLI flag or `GITLAB_URL` env (via
+ *                    dotenv-loaded `.env`). Config is NOT consulted.
+ *   - `PRIVATE_TOKEN` — from `--private-token` CLI flag or env only; never
+ *                       from config (security policy).
+ *
+ * @param config - Accepted for call-site uniformity with the other resolvers
+ *   and DELIBERATELY ignored; tests assert that a fully-populated config has
+ *   zero influence on the resolution.
+ */
+export function resolveGetLastCommitsOptions(
+  cliOpts: GetLastCommitsCliOptions,
+  _config?: GitlabAnalyzerConfig,
+): { ok: true; resolved: ResolvedGetLastCommitsOptions } | { ok: false; errors: ResolveError[] } {
+  void _config; // config is deliberately never read (design D5)
+  const errors: ResolveError[] = [];
+
+  // Required: gitlabUrl — CLI flag > env. Config NEVER for this command.
+  const gitlabUrl = cliOpts.gitlabUrl ?? process.env.GITLAB_URL;
+  if (!gitlabUrl) {
+    errors.push({
+      field: 'gitlabUrl',
+      message:
+        'Set GITLAB_URL in the environment (or .env), or pass --gitlab-url. This command does not read config files.',
+    });
+  }
+
+  // Required: PRIVATE_TOKEN — CLI flag > env. Config NEVER (security policy;
+  // and this command reads no config at all).
+  const cliToken = cliOpts.privateToken?.trim();
+  const privateToken = cliToken || process.env.PRIVATE_TOKEN;
+  if (!privateToken) {
+    errors.push({
+      field: 'PRIVATE_TOKEN',
+      message:
+        'Set PRIVATE_TOKEN in the environment (or .env), or pass --private-token. Tokens are never read from config files.',
+    });
+  }
+
+  // `enableLogs` — CLI flag > ENABLE_LOGS env > built-in default (false).
+  // Same truthy set as the other resolvers ('1', 'true', 'yes', 'on',
+  // case-insensitive). No config fallback for this command.
+  let envEnableLogs: boolean | undefined;
+  const rawEnvEnableLogs = process.env.ENABLE_LOGS;
+  if (rawEnvEnableLogs !== undefined && rawEnvEnableLogs !== '') {
+    envEnableLogs = /^(1|true|yes|on)$/i.test(rawEnvEnableLogs);
+  }
+
+  const resolved: ResolvedGetLastCommitsOptions = {
+    gitlabUrl: gitlabUrl as string, // safe: gated above; errors[] is non-empty if missing
+    privateToken: privateToken as string, // safe: gated above; errors[] is non-empty if missing
+    // Branch: CLI flag only (may be undefined) — `default_branch` is
+    // resolved per repo in core (design D5).
+    branch: cliOpts.branch,
+    file: cliOpts.file,
+    repoNameFilter: cliOpts.repoFilter,
+    excludeRepos: cliOpts.exclude ?? [],
+    output: cliOpts.output,
+    concurrency: cliOpts.concurrency ?? 5,
+    interactive: cliOpts.interactive ?? false,
+    enableLogs: cliOpts.enableLogs ?? envEnableLogs ?? false,
+    format: cliOpts.format ?? 'json',
+    stdout: cliOpts.stdout ?? false,
+    // metricsFile comes ONLY from the CLI flag (diagnostic, opt-in).
+    metricsFile: cliOpts.metricsFile,
+  };
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, resolved };
+}

@@ -1,6 +1,6 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { green, yellow } from 'colorette';
+import { yellow } from 'colorette';
 import {
   findMatches,
   loadConfig,
@@ -31,6 +31,7 @@ import {
   buildReport,
   formatDate,
   isBranchMissingError,
+  printRunSummary,
   renderReportTxt,
   resolveOutputPath,
   type Report,
@@ -442,18 +443,6 @@ async function writeOutput(
 }
 
 // Final run-scope summary block on stderr: scanned count, optional errors, report path.
-function printRunSummary(
-  repositories: ReportRepository[],
-  outputPath: string,
-): void {
-  const errored = repositories.filter((r) => r.error !== null);
-  progress.static(''); // separator between the search and the summary
-  progress.static(green(`✓ Scanned repositories: ${repositories.length}`));
-  if (errored.length > 0) {
-    progress.static(yellow(`⚠ Of which errored: ${errored.length} (${errored.map((r) => r.projectName).join(', ')})`));
-  }
-  progress.static(green(`✓ Report: ${outputPath}`));
-}
 
 /**
  * Internal: shared implementation invoked by the commander action handler.

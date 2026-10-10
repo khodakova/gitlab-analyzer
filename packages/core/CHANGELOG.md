@@ -1,5 +1,38 @@
 # @gitlab-analyzer/core
 
+## 0.2.1
+
+### Patch Changes
+
+- 59475d2: Fix: requests made through the shared axios instance no longer fail with
+  "Invalid URL" when the CLI runs outside a directory containing `.env` with
+  `GITLAB_URL` (e.g. only `--gitlab-url` was passed). The tsup build bundles
+  `config.ts` into both dist entries (`index` and `internal`), creating two
+  separate axios instances per process: the CLI wired api access (baseURL /
+  token) through `internal`, while the commands issued requests through
+  `index` — which stayed unconfigured, so every request not going through
+  `internal` failed (`baseURL: undefined`). The instance is now a
+  process-wide singleton, so all bundles share one instance regardless of
+  entry point.
+
+## 0.2.0
+
+### Minor Changes
+
+- a4270ea: New `get-last-commits` command: report the last commit for every selected
+  GitLab repository — the branch tip commit (default) or, with `--file <glob>`,
+  the last commit touching each file matched by the pattern. JSON/txt report
+  with auto-naming, `--stdout`, `-o/--output`, `-c/--concurrency` (default 5),
+  repo filters (`-r`, `-e`, `--interactive`) and `--metrics-file`. Per-repo
+  branch resolution: `-b` → project `default_branch` → `develop`. This command
+  reads no config file (config support is being phased out).
+
+  Also reworks the low-level `getCommits` API helper: it is now typed as
+  `Commit[]` and **throws** on HTTP errors instead of silently returning
+  `null` (the previous behavior). If you consumed `getCommits` directly and
+  relied on the `null` return, handle the thrown error instead. The helper
+  accepts `path`, `ref_name`, `since`, `until` and `per_page` parameters.
+
 ## 0.1.0
 
 ### Minor Changes
