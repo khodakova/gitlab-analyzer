@@ -17,6 +17,10 @@ yarn-error.log*
 coverage/
 .nyc_output/
 results
-find-matches-results-*.json
+fetch-files-results-*/**/*
+find-matches-results-*.*
+get-last-commits-results-*.*
 docs
 docs/superpowers/
+openspec
+.temp

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolveOptions } from '../options.ts';
+import { resolveOptions, resolveGetLastCommitsOptions } from '../options.ts';
 
 const TEST_GITLAB_URL = 'https://gitlab.example.com';
 const TEST_PRIVATE_TOKEN = 'test-token-for-vitest';
@@ -535,6 +535,211 @@ describe('resolveOptions (precedence: CLI > env > config > default)', () => {
       const res = resolveOptions(['x'], { outputFilter: 'all' }, config as never);
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.resolved.outputFilter).toBe('all');
+    });
+  });
+
+  // ---------- Uncovered cases from docs/test-cases.md section 8 ----------
+
+  describe('coverage gaps (docs/test-cases.md section 8)', () => {
+    it('case 12 (partial): CLI fileInclude [""] / [" "] / [","] — parseCommaList already empties them, [] replaces config', () => {
+      // parseCommaList(' ')/(',') → [] (cli.ts). If a raw [''] slips through
+      // (library callers), it is still just [] after any trim; either way the
+      // empty CLI array REPLACES config and disables the filter.
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileInclude: ['**/*.ts'] },
+      };
+
+      const result = resolveOptions(['x'], { fileInclude: [] }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.fileInclude).toEqual([]);
+        // Not merged with config — the filter is silently OFF.
+      }
+    });
+
+    it('case 33: --branch "" (empty string) overrides config branch — ?? does not catch ""', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, branch: 'main' },
+      };
+
+      const result = resolveOptions(['x'], { branch: '' }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // PIN: empty CLI string wins over config AND over the 'develop' default.
+        expect(result.resolved.branch).toBe('');
+      }
+    });
+
+    it('case 33: --exclude [] (empty array) overrides non-empty config.excludeRepos', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, excludeRepos: ['from-config'] },
+      };
+
+      const result = resolveOptions(['x'], { exclude: [] }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.excludeRepos).toEqual([]);
+      }
+    });
+
+    it('case 33: --file-include [] (empty array) overrides non-empty config.fileInclude', () => {
+      const config = {
+        ...emptyConfig(),
+        defaults: { ...emptyConfig().defaults, fileInclude: ['**/*.ts'] },
+      };
+
+      const result = resolveOptions(['x'], { fileInclude: [] }, config as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.fileInclude).toEqual([]);
+      }
+    });
+  });
+});
+
+describe('resolveGetLastCommitsOptions (precedence: CLI > env > built-in default; config NEVER)', () => {
+  /** Config stuffed with every value the command must ignore. */
+  const noisyConfig = () => ({
+    gitlab: { url: 'https://config.example.com' },
+    defaults: {
+      branch: 'from-config',
+      repoNameFilter: 'from-config',
+      excludeRepos: ['from-config'],
+      fileInclude: ['**/from-config/**'],
+      fileExclude: ['**/from-config/**'],
+      enableLogs: true,
+    },
+    commands: {
+      'get-last-commits': { concurrency: 99, output: './from-config.json', outputFilter: 'found' },
+    },
+  });
+
+  describe('built-in defaults (no CLI flags)', () => {
+    it('format=json, concurrency=5, stdout=false, interactive=false, excludeRepos=[]', () => {
+      const result = resolveGetLastCommitsOptions({}, noisyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved.format).toBe('json');
+        expect(result.resolved.concurrency).toBe(5);
+        expect(result.resolved.stdout).toBe(false);
+        expect(result.resolved.excludeRepos).toEqual([]);
+      }
+    });
+
+    it('branch stays undefined — default_branch is resolved per repo in core', () => {
+      const result = resolveGetLastCommitsOptions({}, noisyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // PIN: no built-in 'develop' default in the CLI resolver (design D5) —
+        // an unset -b must reach core as undefined so default_branch wins.
+        expect(result.resolved.branch).toBeUndefined();
+      }
+    });
+  });
+
+  describe('CLI flags win', () => {
+    it('all flags flow through verbatim, config values are ignored', () => {
+      const result = resolveGetLastCommitsOptions(
+        {
+          repoFilter: 'frontend',
+          exclude: ['wip'],
+          file: '**/*.yaml',
+          branch: 'release/1.0',
+          output: './out.json',
+          concurrency: 3,
+          interactive: true,
+          enableLogs: true,
+          format: 'txt',
+          stdout: true,
+          metricsFile: './metrics.ndjson',
+          privateToken: 'cli-token',
+          gitlabUrl: 'https://cli.example.com',
+        },
+        noisyConfig() as never,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.resolved).toEqual({
+          gitlabUrl: 'https://cli.example.com',
+          privateToken: 'cli-token',
+          branch: 'release/1.0',
+          file: '**/*.yaml',
+          repoNameFilter: 'frontend',
+          excludeRepos: ['wip'],
+          output: './out.json',
+          concurrency: 3,
+          interactive: true,
+          enableLogs: true,
+          format: 'txt',
+          stdout: true,
+          metricsFile: './metrics.ndjson',
+        });
+      }
+    });
+  });
+
+  describe('config is ignored (defaults.* / commands.*)', () => {
+    it('config values never leak into the resolution', () => {
+      const result = resolveGetLastCommitsOptions({}, noisyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // Every value the config tries to inject must NOT appear.
+        expect(result.resolved.gitlabUrl).not.toBe('https://config.example.com');
+        expect(result.resolved.repoNameFilter).toBeUndefined();
+        expect(result.resolved.excludeRepos).toEqual([]);
+        expect(result.resolved.branch).toBeUndefined();
+        expect(result.resolved.enableLogs).toBe(false);
+        expect(result.resolved.output).toBeUndefined();
+        expect(result.resolved.concurrency).toBe(5);
+      }
+    });
+
+    it('gitlab.url from config does not satisfy the required gitlabUrl', () => {
+      delete process.env.GITLAB_URL;
+
+      const result = resolveGetLastCommitsOptions({}, noisyConfig() as never);
+
+      // Other commands fall back to config.gitlab.url; this one must not.
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const fields = result.errors.map((e) => e.field);
+        expect(fields).toContain('gitlabUrl');
+        expect(fields).not.toContain('PRIVATE_TOKEN');
+      }
+    });
+
+    it('consolidated error: BOTH missing URL and token are listed in one result', () => {
+      delete process.env.GITLAB_URL;
+      delete process.env.PRIVATE_TOKEN;
+
+      const result = resolveGetLastCommitsOptions({}, noisyConfig() as never);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const fields = result.errors.map((e) => e.field);
+        expect(fields).toEqual(['gitlabUrl', 'PRIVATE_TOKEN']);
+      }
+    });
+
+    it('token: CLI flag overrides PRIVATE_TOKEN env', () => {
+      process.env.GITLAB_URL = TEST_GITLAB_URL;
+      process.env.PRIVATE_TOKEN = 'env-token';
+
+      const result = resolveGetLastCommitsOptions({ privateToken: 'cli-token' }, noisyConfig() as never);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.resolved.privateToken).toBe('cli-token');
     });
   });
 });

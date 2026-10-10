@@ -152,3 +152,34 @@ describe('report > renderReportTxt', () => {
     expect(txt).toContain('files analyzed: 0');
   });
 });
+
+// ---------- Uncovered cases from docs/test-cases.md section 8 ----------
+
+describe('report > extname edge cases (case 57)', () => {
+  it('case 57: -o "x." — extname is "." → conflict error even with matching json format', () => {
+    // extname('x.') === '.' which is !== '.json' → hasExtension fails → throw.
+    // A file literally named "x." is unusable for the report — pin the check.
+    expect(() =>
+      assertFormatPathConsistency('x.', 'json'),
+    ).toThrow(/conflicts with output path/);
+  });
+
+  it('case 57: -o "./x/.json" — extname is "" → NO check, file .json written anyway (pin)', () => {
+    // extname('./x/.json') === '' (the basename is empty; the path ends with
+    // a slash-looking segment) → the guard returns early → no conflict thrown
+    // even though the resulting file would be named ".json".
+    expect(() =>
+      assertFormatPathConsistency('./x/.json', 'txt'),
+    ).not.toThrow();
+  });
+
+  it('case 44 (partial): explicit --output is returned verbatim (no -1 versioning even if it exists)', () => {
+    // Versioning applies ONLY to auto names. existsSync is mocked false here;
+    // the point is resolveOutputPath never consults it for explicit paths.
+    mocks.existsSync.mockReturnValue(true);
+    expect(resolveOutputPath('/tmp/exists.json', 'json', '2026-08-13-1536')).toBe(
+      '/tmp/exists.json',
+    );
+    expect(mocks.existsSync).not.toHaveBeenCalled();
+  });
+});

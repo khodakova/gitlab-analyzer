@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   findMatches: vi.fn(),
   runFetchFiles: vi.fn(),
+  runGetLastCommits: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
   repoSelect: vi.fn(),
@@ -56,6 +57,10 @@ vi.mock('../utils/repo-select.ts', () => ({
 
 vi.mock('../commands/fetch-files.ts', () => ({
   runFetchFiles: mocks.runFetchFiles,
+}));
+
+vi.mock('../commands/get-last-commits.ts', () => ({
+  runGetLastCommits: mocks.runGetLastCommits,
 }));
 
 import { buildProgram, runCli } from '../cli.ts';
@@ -113,6 +118,7 @@ describe('cli > buildProgram', () => {
     mocks.loadConfig.mockReset();
     mocks.findMatches.mockReset();
     mocks.runFetchFiles.mockReset();
+    mocks.runGetLastCommits.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -393,6 +399,93 @@ describe('cli > buildProgram', () => {
       expect(opts.exclude).toEqual(['a', 'b']);
       expect(opts.privateToken).toBe('cli-token');
       expect(opts.gitlabUrl).toBe('https://cli.example.com');
+    });
+  });
+
+  describe('get-last-commits wiring', () => {
+    it('is registered and lists its options in --help', async () => {
+      const program = buildProgram();
+
+      await program
+        .parseAsync(['node', 'gitlab-analyzer', 'get-last-commits', '--help'])
+        .catch((e: unknown) => {
+          if (e instanceof CommanderError) return;
+          throw e;
+        });
+
+      const out = collectWriteCalls(stdoutSpy) + collectWriteCalls(stderrSpy);
+      expect(out).toContain('get-last-commits');
+      expect(out).toContain('--repo-filter');
+      expect(out).toContain('--exclude');
+      expect(out).toContain('--branch');
+      expect(out).toContain('--file');
+      expect(out).toContain('--interactive');
+      expect(out).toContain('--format');
+      expect(out).toContain('--stdout');
+      expect(out).toContain('--output');
+      expect(out).toContain('--concurrency');
+      expect(out).toContain('--enable-logs');
+      expect(out).toContain('--metrics-file');
+      // --output-filter must NOT be offered on this command.
+      expect(out).not.toContain('--output-filter');
+    });
+
+    it('routes to runGetLastCommits with parsed flags and merged global opts', async () => {
+      mocks.runGetLastCommits.mockResolvedValue({ report: {}, outputPath: 'x.json' });
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'get-last-commits',
+        '-r',
+        'frontend',
+        '-e',
+        'a, b',
+        '-b',
+        'release/1.0',
+        '--file',
+        '**/*.yaml',
+        '-o',
+        './out.json',
+        '--format',
+        'json',
+        '-c',
+        '3',
+        '--private-token',
+        'cli-token',
+        '--gitlab-url',
+        'https://cli.example.com',
+      ]);
+
+      expect(mocks.runGetLastCommits).toHaveBeenCalledTimes(1);
+      const opts = mocks.runGetLastCommits.mock.calls[0][0];
+      expect(opts.repoFilter).toBe('frontend');
+      expect(opts.exclude).toEqual(['a', 'b']);
+      expect(opts.branch).toBe('release/1.0');
+      expect(opts.file).toBe('**/*.yaml');
+      expect(opts.output).toBe('./out.json');
+      expect(opts.privateToken).toBe('cli-token');
+      expect(opts.gitlabUrl).toBe('https://cli.example.com');
+    });
+
+    it('rejects --output-filter as an unknown option (commander)', async () => {
+      const program = buildProgram();
+
+      const caught = await program
+        .parseAsync([
+          'node',
+          'gitlab-analyzer',
+          'get-last-commits',
+          '--output-filter',
+          'found',
+        ])
+        .catch((e: unknown) => e);
+
+      expect(caught).toBeInstanceOf(CommanderError);
+      expect((caught as CommanderError).code).toBe('commander.unknownOption');
+      expect(mocks.runGetLastCommits).not.toHaveBeenCalled();
     });
   });
 
@@ -761,6 +854,7 @@ describe('cli > runCli', () => {
     mocks.loadConfig.mockReset();
     mocks.findMatches.mockReset();
     mocks.runFetchFiles.mockReset();
+    mocks.runGetLastCommits.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -833,5 +927,141 @@ describe('cli > runCli', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     const stderrText = collectWriteCalls(stderrSpy);
     expect(stderrText).toContain('Error: boom');
+  });
+
+  // ---------- Uncovered cases from docs/test-cases.md section 8 ----------
+
+  describe('coverage gaps (docs/test-cases.md section 8)', () => {
+    it('case 45: --concurrency 0 flows to findMatches; p-limit failure exits 1 (pin actual mechanism)', async () => {
+      // Installed p-limit 7.3.1 THROWS SYNCHRONOUSLY from pLimit(0) with
+      // "Expected `concurrency` to be a number from 1 and up" — the section-7
+      // wording ("rejected promise", "limit is not a function") described
+      // p-limit 2.3.0. Here findMatches is mocked, so we emulate the real
+      // core behavior (pinned against the real p-limit in core/fm
+      // "case 45: real p-limit throws on concurrency 0/NaN") and pin the CLI
+      // half: the unvalidated parseInt value flows through and the run exits 1.
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(() => {
+        throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program
+        .parseAsync([
+          'node',
+          'gitlab-analyzer',
+          'find-matches',
+          'needle',
+          '--concurrency',
+          '0',
+          '--output',
+          path.join(os.tmpdir(), `cli-case45a-${Date.now()}.json`),
+        ])
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(1)') return;
+          throw e;
+        });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      // The raw parsed value (0) reached the library unvalidated — the actual
+      // bug surface (config concurrency is zod-validated, CLI is not).
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      expect(mocks.findMatches.mock.calls[0][0].concurrency).toBe(0);
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('Expected `concurrency` to be a number from 1 and up');
+    });
+
+    it('case 45: --concurrency abc → parseInt NaN flows through unvalidated → exit 1 (pin actual mechanism)', async () => {
+      // The CLI's bare parseInt passes NaN through (asymmetry vs the
+      // zod-validated config value); p-limit then throws on NaN.
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.getAllProjects.mockResolvedValue([
+        { id: 1, name: 'alpha', description: null },
+      ]);
+      mocks.findMatches.mockImplementation(() => {
+        throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+      });
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program
+        .parseAsync([
+          'node',
+          'gitlab-analyzer',
+          'find-matches',
+          'needle',
+          '-c',
+          'abc',
+          '--output',
+          path.join(os.tmpdir(), `cli-case45b-${Date.now()}.json`),
+        ])
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.message === 'process.exit(1)') return;
+          throw e;
+        });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      // NaN passed verbatim — commander did not reject the value.
+      const passed = mocks.findMatches.mock.calls[0][0];
+      expect(passed.concurrency).toBeNaN();
+      const stderrText = collectWriteCalls(stderrSpy);
+      expect(stderrText).toContain('Expected `concurrency` to be a number from 1 and up');
+    });
+
+    it('case 22 (partial): --exclude "" parses to [] (wipes any non-empty config excludeRepos)', async () => {
+      mocks.loadConfig.mockResolvedValue({
+        ...defaultConfig(),
+        defaults: {
+          ...defaultConfig().defaults,
+          excludeRepos: ['from-config'],
+        },
+      });
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--exclude',
+        '',
+      ]);
+
+      // Empty CLI value REPLACES the config list (empty-vs-unset semantics).
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findMatches.mock.calls[0][0];
+      expect(passedOpts.excludeRepos).toEqual([]);
+    });
+
+    it('case 33: --branch "" flows through as empty string (?? does not catch "" — bypasses the develop default)', async () => {
+      mocks.loadConfig.mockResolvedValue(defaultConfig());
+      mocks.findMatches.mockResolvedValue([]);
+      mocks.writeFile.mockResolvedValue(undefined);
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'find-matches',
+        'needle',
+        '--branch',
+        '',
+      ]);
+
+      expect(mocks.findMatches).toHaveBeenCalledTimes(1);
+      const passedOpts = mocks.findMatches.mock.calls[0][0];
+      // PIN: empty string is passed verbatim; config/default 'develop' is NOT used.
+      expect(passedOpts.branch).toBe('');
+    });
   });
 });

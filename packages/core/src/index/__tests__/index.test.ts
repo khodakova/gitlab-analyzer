@@ -43,7 +43,7 @@ describe('index > public API surface', () => {
     expect(mod.GitlabAnalyzerConfig).toBeUndefined();
   });
 
-  it('exposes the public runtime values (findMatches, loadConfig, logger, coverage sentinel)', () => {
+  it('exposes the public runtime values (findMatches, fetchFiles, getLastCommits, loadConfig, logger, coverage sentinel)', () => {
     // The sentinel `__reExportSentinel` exists purely to anchor v8 coverage
     // on this pure-re-export file; assert it is present so future
     // refactors do not silently drop it.
@@ -55,6 +55,7 @@ describe('index > public API surface', () => {
       'findMatches',
       'flushLogs',
       'formatDuration',
+      'getLastCommits',
       'loadConfig',
       'logger',
     ]);
