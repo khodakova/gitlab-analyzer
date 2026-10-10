@@ -1,5 +1,12 @@
 # @gitlab-analyzer/cli
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [59475d2]
+  - @gitlab-analyzer/core@0.2.1
+
 ## 0.3.0
 
 ### Minor Changes
