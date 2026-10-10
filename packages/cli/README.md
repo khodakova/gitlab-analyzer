@@ -458,6 +458,94 @@ gitlab-analyzer fetch-files "package-lock.json" ^
 
 ---
 
+## `get-last-commits` — last commit per repository
+
+Answers "what was the last change here?" across the whole instance in one
+run: for every selected repository it reports the **tip commit of a branch**
+(HEAD mode, the default — one request per repo) or, with `--file <glob>`, the
+**last commit touching each file** matched by the glob (per-file mode). Use
+it to find stale repos, confirm a fix landed, or build a per-file change
+inventory.
+
+```bash
+gitlab-analyzer get-last-commits [options]
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `-r, --repo-filter <str>` | Substring filter for project names (passed to GitLab `search=`) | — |
+| `-e, --exclude <list>` | Comma-separated repo names to skip (exact name) | `[]` |
+| `-b, --branch <name>` | Branch to query. Omitted → each repo's `default_branch`, falling back to `develop` | per-repo |
+| `--file <glob>` | **Per-file mode**: one glob pattern (same semantics as `fetch-files` patterns — without `/` matches basename, with `/` matches the full tree path). A failed request for one matched path does not abort the repo: it is recorded in `failed` while the rest are processed | — (HEAD mode) |
+| `--format <txt\|json>` | Report format (also drives the file extension) | `json` |
+| `--stdout` | Also write the report to stdout (handy for piping) | off |
+| `-o, --output <path>` | Where to write the report; omit for an auto-generated name | auto-name |
+| `-c, --concurrency <n>` | Max parallel repositories (a repo's tree listing and all its per-file commits requests share one slot) | `5` |
+| `--interactive` | Pick repos manually before scanning | off |
+| `--enable-logs` | Verbose debug/API logging (auto-enabled with `--interactive`) | off |
+| `--metrics-file <path>` | Write performance metrics (NDJSON) to a file. Diagnostic only | — |
+
+Plus the [global flags](#global-flags) (`--gitlab-url`, `--private-token`).
+Tokens come only from env / `.env` / `--private-token` — never from config.
+
+> **No config file.** Unlike `find-matches`, this command does NOT read
+> `gitlab-analyzer.json` at all — `defaults.*` and `commands.*` values are
+> ignored. Options resolve from CLI flags and built-in defaults only (config
+> support is being phased out of the tool). A `.env` with `GITLAB_URL` /
+> `PRIVATE_TOKEN` (or the global flags) is all it needs.
+
+### Report shape
+
+`{ metadata, repositories }` like `find-matches`. `metadata` carries
+`generatedAt`, `branch` (the `-b` value or `null` — there is no single branch
+when per-repo `default_branch` resolution is in play), `file` (the glob or
+`null`), `repoNameFilter` and `excludeRepos`. Every processed repo appears in
+`repositories` — including repos with an error (`error` + `results: []`,
+`branchExists: false` when the branch looks missing) and repos with no
+matches (`results: []`, `error: null`). In per-file mode a repo whose tree
+listing hit the 10k-entry pagination cap carries `truncated: true` — its
+results may be missing matched paths. Each result entry carries `path`
+(`null` in HEAD mode), `commitId`, `shortId`, `title`, `authorName`,
+`committedDate` and the commit `webUrl`; in per-file mode failed paths land
+in `failed` (`{path, error}`) while successful ones stay in `results` —
+`failed.length > 0` with `error: null` is a partial success.
+
+Auto-name: `get-last-commits-results-<DATE>.<ext>` with `-1`, `-2`… suffixes
+on collision; `--format txt` + `-o *.json` conflict is an error; `--stdout`
+additionally prints the report (progress/errors stay on stderr).
+
+### Cost of per-file mode
+
+HEAD mode is one commits request per repo. Per-file mode is **1 tree listing
++ N commits requests per repo** (one per matched path) — a broad glob like
+`**/*.yaml` on many repos makes many API calls. Lower `-c/--concurrency` if
+you hit rate limits; there are no automatic retries for commits/tree
+requests.
+
+### Examples
+
+```bash
+# HEAD mode: last commit on each repo's default branch
+gitlab-analyzer get-last-commits
+
+# A specific branch, frontend repos only
+gitlab-analyzer get-last-commits -r frontend -b release/1.0
+
+# Per-file mode: last commit per YAML file, report to stdout as text
+gitlab-analyzer get-last-commits --file '**/*.yaml' --format txt --stdout
+```
+
+### How it differs from `find-matches` / `fetch-files`
+
+- **`find-matches`** searches file *contents* (one archive download per repo).
+- **`fetch-files`** downloads file *contents* (tree walk + one blob request per file).
+- **`get-last-commits`** reports commit *metadata*: HEAD mode never walks the
+  tree (one request per repo); per-file mode needs the tree to expand the glob
+  and then one commits request per matched path. It cannot show history or
+  diffs — the last commit only — and there is no `--output-filter`.
+
+---
+
 ## Configuration (optional)
 
 Option resolution precedence (highest wins):

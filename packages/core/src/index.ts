@@ -58,6 +58,15 @@ export type {
   SaveFileInput,
   SaveFileResult,
 } from './commands/fetch-files.types.ts';
+export { getLastCommits } from './commands/get-last-commits.ts';
+export type {
+  LastCommitOptions,
+  LastCommitResult,
+  LastCommitEntry,
+  LastCommitFailedPath,
+  LastCommitReport,
+  LastCommitReportRepository,
+} from './commands/get-last-commits.types.ts';
 export type { RepoInfo } from './types.ts';
 export { loadConfig } from './config/load.ts';
 export { configureLogger, logger, flushLogs, formatDuration } from './utils/logger.ts';

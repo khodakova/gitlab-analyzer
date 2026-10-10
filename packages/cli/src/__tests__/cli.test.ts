@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   findMatches: vi.fn(),
   runFetchFiles: vi.fn(),
+  runGetLastCommits: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
   repoSelect: vi.fn(),
@@ -56,6 +57,10 @@ vi.mock('../utils/repo-select.ts', () => ({
 
 vi.mock('../commands/fetch-files.ts', () => ({
   runFetchFiles: mocks.runFetchFiles,
+}));
+
+vi.mock('../commands/get-last-commits.ts', () => ({
+  runGetLastCommits: mocks.runGetLastCommits,
 }));
 
 import { buildProgram, runCli } from '../cli.ts';
@@ -113,6 +118,7 @@ describe('cli > buildProgram', () => {
     mocks.loadConfig.mockReset();
     mocks.findMatches.mockReset();
     mocks.runFetchFiles.mockReset();
+    mocks.runGetLastCommits.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();
@@ -393,6 +399,93 @@ describe('cli > buildProgram', () => {
       expect(opts.exclude).toEqual(['a', 'b']);
       expect(opts.privateToken).toBe('cli-token');
       expect(opts.gitlabUrl).toBe('https://cli.example.com');
+    });
+  });
+
+  describe('get-last-commits wiring', () => {
+    it('is registered and lists its options in --help', async () => {
+      const program = buildProgram();
+
+      await program
+        .parseAsync(['node', 'gitlab-analyzer', 'get-last-commits', '--help'])
+        .catch((e: unknown) => {
+          if (e instanceof CommanderError) return;
+          throw e;
+        });
+
+      const out = collectWriteCalls(stdoutSpy) + collectWriteCalls(stderrSpy);
+      expect(out).toContain('get-last-commits');
+      expect(out).toContain('--repo-filter');
+      expect(out).toContain('--exclude');
+      expect(out).toContain('--branch');
+      expect(out).toContain('--file');
+      expect(out).toContain('--interactive');
+      expect(out).toContain('--format');
+      expect(out).toContain('--stdout');
+      expect(out).toContain('--output');
+      expect(out).toContain('--concurrency');
+      expect(out).toContain('--enable-logs');
+      expect(out).toContain('--metrics-file');
+      // --output-filter must NOT be offered on this command.
+      expect(out).not.toContain('--output-filter');
+    });
+
+    it('routes to runGetLastCommits with parsed flags and merged global opts', async () => {
+      mocks.runGetLastCommits.mockResolvedValue({ report: {}, outputPath: 'x.json' });
+
+      const program = buildProgram();
+
+      await program.parseAsync([
+        'node',
+        'gitlab-analyzer',
+        'get-last-commits',
+        '-r',
+        'frontend',
+        '-e',
+        'a, b',
+        '-b',
+        'release/1.0',
+        '--file',
+        '**/*.yaml',
+        '-o',
+        './out.json',
+        '--format',
+        'json',
+        '-c',
+        '3',
+        '--private-token',
+        'cli-token',
+        '--gitlab-url',
+        'https://cli.example.com',
+      ]);
+
+      expect(mocks.runGetLastCommits).toHaveBeenCalledTimes(1);
+      const opts = mocks.runGetLastCommits.mock.calls[0][0];
+      expect(opts.repoFilter).toBe('frontend');
+      expect(opts.exclude).toEqual(['a', 'b']);
+      expect(opts.branch).toBe('release/1.0');
+      expect(opts.file).toBe('**/*.yaml');
+      expect(opts.output).toBe('./out.json');
+      expect(opts.privateToken).toBe('cli-token');
+      expect(opts.gitlabUrl).toBe('https://cli.example.com');
+    });
+
+    it('rejects --output-filter as an unknown option (commander)', async () => {
+      const program = buildProgram();
+
+      const caught = await program
+        .parseAsync([
+          'node',
+          'gitlab-analyzer',
+          'get-last-commits',
+          '--output-filter',
+          'found',
+        ])
+        .catch((e: unknown) => e);
+
+      expect(caught).toBeInstanceOf(CommanderError);
+      expect((caught as CommanderError).code).toBe('commander.unknownOption');
+      expect(mocks.runGetLastCommits).not.toHaveBeenCalled();
     });
   });
 
@@ -761,6 +854,7 @@ describe('cli > runCli', () => {
     mocks.loadConfig.mockReset();
     mocks.findMatches.mockReset();
     mocks.runFetchFiles.mockReset();
+    mocks.runGetLastCommits.mockReset();
     mocks.writeFile.mockReset();
     mocks.mkdir.mockReset();
     mocks.repoSelect.mockReset();

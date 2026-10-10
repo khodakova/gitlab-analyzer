@@ -510,6 +510,51 @@ Key contract points:
   `FetchedFile`, `FetchedFileStatus`, `RepoStatus`, `SaveFileInput`,
   `SaveFileResult`) are exported from `gitlab-analyzer`.
 
+### `getLastCommits()`
+
+`getLastCommits` reports the last commit for every selected repository —
+the **tip commit of a branch** (HEAD mode, the default) or the **last commit
+touching each file matched by a glob** (per-file mode, `file` option). Same
+plumbing as `fetchFiles`: `repoNameFilter` / `excludeRepos` / `selectedRepos`
+/ `projects` filters, `concurrency` default 5 (one repo — one slot, including
+all its per-file requests), `onProgress` / `onRepoStart` / `metrics`.
+
+Branch resolution is per repo: `opts.branch` → project `default_branch` →
+`'develop'` — so `branch` is OPTIONAL here (unlike `findMatches`/`fetchFiles`).
+
+```ts
+import { getLastCommits } from 'gitlab-analyzer';
+
+const results = await getLastCommits({
+  branch: undefined, // or '-b' value; undefined → per-repo default_branch → develop
+  repoNameFilter: 'frontend',
+  file: '**/*.yaml', // omit for HEAD mode (one entry per repo, path: null)
+  concurrency: 5,
+  onProgress: (done, total, repo, error) => {
+    process.stderr.write(`[${done}/${total}] ${repo}${error ? ` (${error})` : ''}\n`);
+  },
+});
+
+for (const repo of results) {
+  if (repo.error !== null) continue; // repo-level failure (missing branch, 403…)
+  for (const entry of repo.results) {
+    console.log(entry.path ?? '(HEAD)', entry.shortId, entry.authorName, entry.title);
+  }
+}
+```
+
+- **Two modes.** Without `file` — one result entry per repo (`path: null`).
+  With `file` — the tree is listed, the glob is applied (same semantics as
+  `fetch-files` patterns), and one commits request runs per matched path;
+  a failed per-path request lands in `failed` (`{path, error}`) without
+  aborting the repo.
+- **Return shape.** One `LastCommitResult` per processed repo (failed repos
+  included, with `error` and empty `results`). `branchExists` is NOT computed
+  in core — the CLI derives it from `repo.error`.
+- All types (`LastCommitOptions`, `LastCommitResult`, `LastCommitEntry`,
+  `LastCommitFailedPath`, `LastCommitReport`, `LastCommitReportRepository`)
+  are exported from `gitlab-analyzer`.
+
 ## Output Schema
 
 ### Library API (`findMatches`)

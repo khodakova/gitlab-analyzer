@@ -7,7 +7,8 @@ import { logger, flushLogs } from '@gitlab-analyzer/core';
 import { runFindMatches } from './commands/find-matches.ts';
 import { runListRepos } from './commands/list-repos.ts';
 import { runFetchFiles } from './commands/fetch-files.ts';
-import type { FindMatchesCliOptions, FetchFilesCliOptions } from './utils/options.ts';
+import { runGetLastCommits } from './commands/get-last-commits.ts';
+import type { FindMatchesCliOptions, FetchFilesCliOptions, GetLastCommitsCliOptions } from './utils/options.ts';
 
 // The thin CLI layer only wires commander to the command implementations.
 // All option resolution, repo fetching, search orchestration, report
@@ -206,6 +207,37 @@ export function buildProgram(): Command {
       try {
         const global = program.opts<{ privateToken?: string; gitlabUrl?: string }>();
         await runFetchFiles(patterns, { ...opts, privateToken: global.privateToken, gitlabUrl: global.gitlabUrl });
+      } catch (err) {
+        await handleActionError(err);
+      }
+    });
+
+  program
+    .command('get-last-commits')
+    .description(
+      'Report the last commit for every selected GitLab repository: the branch tip (default) or, with --file, the last commit touching each file matched by the glob',
+    )
+    .addOption(new Option('-r, --repo-filter <str>', 'Substring filter for project names (passed to GitLab search=)'))
+    .option('-e, --exclude <list>', 'Comma-separated list of repo names to skip', parseCommaList)
+    .option('-b, --branch <name>', 'Branch to query (default: per-repo default_branch, then develop)')
+    .option(
+      '--file <glob>',
+      "Per-file mode: one glob pattern (same semantics as fetch-files patterns); without it the branch tip commit is reported",
+    )
+    .option('--interactive', 'Pick repos manually before scanning')
+    .addOption(
+      new Option('--format <txt|json>', 'Report format (default json; drives the extension of the auto-generated file name).').choices(['txt', 'json']),
+    )
+    .option('--stdout', 'Also write the report to stdout (in addition to the file)')
+    .option('-o, --output <path>', 'Path to write the report; omit to use an auto-generated file name')
+    .option('-c, --concurrency <n>', 'Max parallel repositories (a repo and all its per-file requests share one slot)', (val: string) => parseInt(val, 10))
+    .option('--enable-logs', 'Enable debug/API logging (also enabled automatically with --interactive)')
+    .option('--metrics-file <path>', 'Write performance metrics (NDJSON) to this file. Diagnostic only.')
+    // NOTE: --output-filter is deliberately NOT available on this command.
+    .action(async (opts: GetLastCommitsCliOptions) => {
+      try {
+        const global = program.opts<{ privateToken?: string; gitlabUrl?: string }>();
+        await runGetLastCommits({ ...opts, privateToken: global.privateToken, gitlabUrl: global.gitlabUrl });
       } catch (err) {
         await handleActionError(err);
       }

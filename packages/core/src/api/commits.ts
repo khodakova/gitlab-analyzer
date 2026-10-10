@@ -1,18 +1,51 @@
 import { axiosInstance } from './config.ts';
+import type { Commit } from '../types.ts';
 
 /**
- * Get commits by file
+ * Parameters for {@link getCommits}. `ref_name` is required — GitLab defaults
+ * it to the project's default branch, but relying on that hides which branch
+ * was actually scanned.
  */
-export function getCommits(projectId: number, params?: {path: string, ref_name: string, since: string}) {
-  return axiosInstance.get<Blob>(`/api/v4/projects/${projectId}/repository/commits`, {
-    params
-  })
-    .then((resp) => {
-      return resp.data
-    })
-    .catch((err) => {
-      return null;
-    })
+export type GetCommitsParams = {
+  /** Restrict commits to those touching this file path. */
+  path?: string,
+  ref_name: string,
+  since?: string,
+  until?: string,
+  per_page?: number,
+};
+
+/**
+ * List commits of a repository via the GitLab commits REST API.
+ *
+ * Errors are PROPAGATED (never swallowed into `null`), mirroring
+ * `project-archive.ts`: the caller decides per-repo recovery (e.g. a 404
+ * "branch not found" becomes a repo error with `branchExists: false`).
+ * A timeout (AbortSignal) is rewritten into a human-readable message;
+ * axios errors keep their native message ("Request failed with status
+ * code 404") so `isBranchMissingError` heuristics keep working.
+ */
+export async function getCommits(
+  projectId: number,
+  params: GetCommitsParams,
+): Promise<Commit[]> {
+  try {
+    const resp = await axiosInstance.get<Commit[]>(
+      `/api/v4/projects/${projectId}/repository/commits`,
+      {
+        params,
+        // Hard-abort at 60s (same guard as the archive download): bare axios
+        // `timeout` does not abort a server that stopped sending data, and a
+        // stuck request would hold its p-limit slot indefinitely.
+        signal: AbortSignal.timeout(60_000),
+      },
+    );
+    return resp.data;
+  } catch (err) {
+    const isTimeout =
+      (err as { cause?: { name?: string } | DOMException } | null)?.cause?.name === 'TimeoutError';
+    throw isTimeout ? new Error('commits request timed out (60s)') : err;
+  }
 }
 
 /**
